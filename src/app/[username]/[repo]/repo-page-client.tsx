@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { DiagramStateResponse } from "~/features/diagram/types";
+import { parseGitHubRepoUrl } from "~/features/diagram/github-url";
+import {
+  DrillDownMenu,
+  type DrillDownTarget,
+} from "~/components/drill-down-menu";
 import MainCard from "~/components/main-card";
 import Loading from "~/components/loading";
 import MermaidChart from "~/components/mermaid-diagram";
@@ -30,6 +36,8 @@ export default function RepoPageClient({
 }: RepoPageClientProps) {
   const [zoomingEnabled, setZoomingEnabled] = useState(false);
   const [diagramRendered, setDiagramRendered] = useState(false);
+  const [drillTarget, setDrillTarget] = useState<DrillDownTarget | null>(null);
+  const router = useRouter();
 
   useStarReminder();
 
@@ -63,6 +71,40 @@ export default function RepoPageClient({
   const handleDiagramRenderComplete = useCallback(() => {
     setDiagramRendered(true);
   }, []);
+
+  const handleNodeLinkClick = useCallback(
+    (href: string, event: MouseEvent) => {
+      // Only intercept directory (/tree/) links pointing at this repository;
+      // file links keep their default open-on-GitHub behavior.
+      if (!href.includes("/tree/")) return false;
+      const parsed = parseGitHubRepoUrl(href);
+      if (
+        !parsed?.subdir ||
+        parsed.username.toLowerCase() !== normalizedUsername ||
+        parsed.repo.toLowerCase() !== normalizedRepo
+      ) {
+        return false;
+      }
+
+      setDrillTarget({
+        x: event.clientX,
+        y: event.clientY,
+        githubUrl: href,
+        subdir: parsed.subdir,
+      });
+      return true;
+    },
+    [normalizedRepo, normalizedUsername],
+  );
+
+  const handleDrillDown = useCallback(() => {
+    if (!drillTarget) return;
+    const query = new URLSearchParams();
+    if (diagramRef) query.set("ref", diagramRef);
+    query.set("subdir", drillTarget.subdir);
+    setDrillTarget(null);
+    router.push(`/${normalizedUsername}/${normalizedRepo}?${query.toString()}`);
+  }, [diagramRef, drillTarget, normalizedRepo, normalizedUsername, router]);
 
   useEffect(() => {
     setDiagramRendered(false);
@@ -128,6 +170,7 @@ export default function RepoPageClient({
                     zoomingEnabled={zoomingEnabled}
                     onRenderError={handleDiagramRenderError}
                     onRenderComplete={handleDiagramRenderComplete}
+                    onNodeLinkClick={handleNodeLinkClick}
                   />
                 </div>
                 {diagramRendered && (
@@ -155,6 +198,14 @@ export default function RepoPageClient({
           </div>
         )}
       </div>
+
+      {drillTarget && (
+        <DrillDownMenu
+          target={drillTarget}
+          onDrillDown={handleDrillDown}
+          onDismiss={() => setDrillTarget(null)}
+        />
+      )}
 
       <ApiKeyDialog
         isOpen={showApiKeyDialog}

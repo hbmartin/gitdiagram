@@ -37,6 +37,11 @@ interface MermaidChartProps {
   zoomingEnabled?: boolean;
   onRenderError?: (message: string) => void;
   onRenderComplete?: () => void;
+  /**
+   * Called when a linked diagram node is clicked. Return true to consume the
+   * click (prevents the default link navigation).
+   */
+  onNodeLinkClick?: (href: string, event: MouseEvent) => boolean;
   containerClassName?: string;
   diagramClassName?: string;
   backgroundColor?: string;
@@ -54,6 +59,7 @@ const MermaidChart = ({
   zoomingEnabled = true,
   onRenderError,
   onRenderComplete,
+  onNodeLinkClick,
   containerClassName,
   diagramClassName,
   backgroundColor,
@@ -436,6 +442,29 @@ const MermaidChart = ({
     onRenderError,
     onRenderComplete,
   ]);
+
+  useEffect(() => {
+    if (!onNodeLinkClick) return;
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleClick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const anchor = event.target.closest("a");
+      if (!anchor) return;
+      const href =
+        anchor.getAttribute("xlink:href") ?? anchor.getAttribute("href");
+      if (!href) return;
+      if (onNodeLinkClick(href, event)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    container.addEventListener("click", handleClick, true);
+    return () => container.removeEventListener("click", handleClick, true);
+  }, [onNodeLinkClick]);
 
   useEffect(() => {
     if (!zoomingEnabled) return;
