@@ -94,6 +94,12 @@ export interface GenerationTimelineEvent {
 
 export type DiagramSessionStatus = "idle" | "running" | "succeeded" | "failed";
 
+export interface DiagramSampleInfo {
+  includedPaths: number;
+  totalPaths: number;
+  tier: string;
+}
+
 export interface GenerationSessionAudit {
   sessionId: string;
   status: DiagramSessionStatus;
@@ -108,6 +114,7 @@ export interface GenerationSessionAudit {
   estimatedCost?: GenerationCostSummary;
   finalCost?: GenerationCostSummary;
   explanation?: string;
+  sampled?: DiagramSampleInfo | null;
   graph: DiagramGraph | null;
   graphAttempts: GraphAttemptAudit[];
   stageUsages: GenerationStageUsage[];

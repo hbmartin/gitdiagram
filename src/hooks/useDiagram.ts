@@ -26,6 +26,7 @@ function toInitialStreamState(
     explanation: stateRecord.explanation ?? undefined,
     graph: stateRecord.graph ?? undefined,
     latestSessionAudit: stateRecord.latestSessionAudit ?? undefined,
+    sampled: stateRecord.latestSessionAudit?.sampled ?? undefined,
     costSummary:
       stateRecord.latestSessionAudit?.finalCost ??
       stateRecord.latestSessionAudit?.estimatedCost,
@@ -125,6 +126,7 @@ export function useDiagram(
           prev.costSummary,
         graph: stateRecord.graph ?? latestAudit?.graph ?? prev.graph,
         graphAttempts: latestAudit?.graphAttempts ?? prev.graphAttempts,
+        sampled: latestAudit?.sampled ?? prev.sampled,
         failureStage: shouldExposeFailure
           ? latestAudit?.failureStage
           : prev.failureStage,

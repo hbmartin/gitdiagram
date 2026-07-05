@@ -76,6 +76,7 @@ export function useDiagramStream({
             diagram: data.diagram ?? prev.diagram,
             validationError: data.validation_error ?? prev.validationError,
             failureStage: data.failure_stage ?? prev.failureStage,
+            sampled: data.sampled ?? prev.sampled,
           }));
           break;
         case "explanation_chunk":
@@ -104,6 +105,8 @@ export function useDiagramStream({
             graph: data.graph,
             graphAttempts: data.graph_attempts,
             latestSessionAudit: data.latest_session_audit,
+            sampled:
+              data.sampled ?? data.latest_session_audit?.sampled ?? undefined,
           });
           await onComplete({
             explanation,

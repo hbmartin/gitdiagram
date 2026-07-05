@@ -11,6 +11,7 @@ import { ApiKeyDialog } from "~/components/api-key-dialog";
 import { ApiKeyButton } from "~/components/api-key-button";
 import { useStarReminder } from "~/hooks/useStarReminder";
 import { SponsorSlot } from "~/components/sponsor-slot";
+import { SampledIndicator } from "~/components/sampled-indicator";
 
 type RepoPageClientProps = {
   username: string;
@@ -96,6 +97,7 @@ export default function RepoPageClient({
           <div className="flex w-full flex-col items-center gap-8">
             {hasDiagram && (
               <>
+                <SampledIndicator sampled={state.sampled} />
                 <div className="flex w-full justify-center px-4">
                   <MermaidChart
                     chart={diagram}

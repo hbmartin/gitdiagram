@@ -28,6 +28,7 @@ export function toStoredSessionSummary(
     quotaResetAt: audit.quotaResetAt,
     estimatedCost: audit.estimatedCost,
     finalCost: audit.finalCost,
+    sampled: audit.sampled,
     graph: audit.graph,
     graphAttempts: audit.status === "failed" ? audit.graphAttempts : [],
     stageUsages: [],

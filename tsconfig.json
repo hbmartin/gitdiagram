@@ -51,6 +51,7 @@
   ],
   "exclude": [
     "node_modules",
+    "coverage",
     "backend/**/*",
     "backend/venv",
     "backend/.venv",

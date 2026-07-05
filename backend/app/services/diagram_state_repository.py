@@ -532,6 +532,7 @@ class DiagramStateRepository:
             "quotaResetAt": audit.get("quotaResetAt"),
             "estimatedCost": audit.get("estimatedCost"),
             "finalCost": audit.get("finalCost"),
+            "sampled": audit.get("sampled"),
             "graph": audit.get("graph"),
             "graphAttempts": audit.get("graphAttempts", []) if audit.get("status") == "failed" else [],
             "stageUsages": [],

@@ -6,6 +6,7 @@ import type { GenerationTokenUsage } from "~/features/diagram/cost";
 import {
   diagramGraphSchema,
   MAX_GRAPH_ATTEMPTS,
+  type DiagramSampleInfo,
 } from "~/features/diagram/graph";
 import type { ArtifactVisibility } from "~/server/storage/types";
 import { revalidateBrowseIndexCache } from "~/app/browse/data";
@@ -36,6 +37,12 @@ import {
 } from "~/server/generate/format";
 import { getGithubData } from "~/server/generate/github";
 import {
+  buildFileTreeSampleNote,
+  fitFileTreeToTokenBudget,
+  MIN_TREE_TOKEN_BUDGET,
+  TRUNCATION_TOKEN_MARGIN,
+} from "~/server/generate/tree-budget";
+import {
   buildFileTreeLookup,
   compileDiagramGraph,
   formatGraphValidationFeedback,
@@ -48,6 +55,7 @@ import {
   shouldUseExactInputTokenCount,
 } from "~/server/generate/model-config";
 import {
+  estimateTokens,
   generateStructuredOutput,
   streamCompletion,
 } from "~/server/generate/openai";
@@ -79,6 +87,10 @@ import {
   GRAPH_MAX_OUTPUT_TOKENS,
   sumGenerationUsage,
 } from "~/server/generate/pricing";
+import {
+  FREE_GENERATION_INPUT_TOKEN_LIMIT,
+  HARD_GENERATION_INPUT_TOKEN_LIMIT,
+} from "~/server/generate/limits";
 import { generateRequestSchema, sseMessage } from "~/server/generate/types";
 
 export const runtime = "nodejs";
@@ -87,8 +99,6 @@ export const maxDuration = 300;
 
 const DEFAULT_OPENAI_KEY_QUOTA_EXHAUSTED_ERROR =
   "GitDiagram's default OpenAI key is temporarily unavailable because its upstream API quota is exhausted. I'm a solo student engineer running this free and open source, so please try again later or use your own OpenAI API key.";
-const FREE_GENERATION_INPUT_TOKEN_LIMIT = 100_000;
-const HARD_GENERATION_INPUT_TOKEN_LIMIT = 195_000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -308,26 +318,52 @@ export async function POST(request: Request) {
             }
           }
 
-          const githubData = await getGithubData(
+          let githubData = await getGithubData(
             username,
             repo,
             githubPat,
             generationAbortController.signal,
           );
           storageVisibility = githubData.isPrivate ? "private" : "public";
-          estimate = await estimateGenerationCost({
-            provider,
-            model,
-            fileTree: githubData.fileTree,
-            readme: githubData.readme,
-            username,
-            repo,
-            apiKey,
-            preferExactInputTokenCount: shouldUseExactInputTokenCount({
+          const runEstimate = () =>
+            estimateGenerationCost({
               provider,
+              model,
+              fileTree: githubData.fileTree,
+              readme: githubData.readme,
+              username,
+              repo,
               apiKey,
-            }),
-          });
+              preferExactInputTokenCount: shouldUseExactInputTokenCount({
+                provider,
+                apiKey,
+              }),
+            });
+          estimate = await runEstimate();
+
+          const inputTokenLimit = apiKey
+            ? HARD_GENERATION_INPUT_TOKEN_LIMIT
+            : FREE_GENERATION_INPUT_TOKEN_LIMIT;
+          let sampleInfo: DiagramSampleInfo | null = null;
+          if (estimate.explanationInputTokens > inputTokenLimit) {
+            const treeTokens = estimateTokens(githubData.fileTree);
+            const overage = estimate.explanationInputTokens - inputTokenLimit;
+            const treeBudget = treeTokens - overage - TRUNCATION_TOKEN_MARGIN;
+            if (treeBudget >= MIN_TREE_TOKEN_BUDGET) {
+              const fitted = fitFileTreeToTokenBudget(
+                githubData.fileTree,
+                treeBudget,
+              );
+              if (fitted.sample) {
+                githubData = { ...githubData, fileTree: fitted.fileTree };
+                sampleInfo = fitted.sample;
+                estimate = await runEstimate();
+              }
+            }
+          }
+          const fileTreeNote = sampleInfo
+            ? buildFileTreeSampleNote(sampleInfo)
+            : undefined;
           const tokenCount = estimate.explanationInputTokens;
 
           audit = withStageUsage(
@@ -336,6 +372,7 @@ export async function POST(request: Request) {
                 ...audit,
                 provider,
                 model,
+                sampled: sampleInfo ?? undefined,
               },
               estimate.costSummary,
             ),
@@ -352,6 +389,7 @@ export async function POST(request: Request) {
             session_id: audit.sessionId,
             message: "Starting generation process...",
             cost_summary: estimate.costSummary,
+            sampled: sampleInfo ?? undefined,
           });
 
           throwIfAborted(generationAbortController.signal);
@@ -510,6 +548,7 @@ export async function POST(request: Request) {
             systemPrompt: SYSTEM_FIRST_PROMPT,
             userPrompt: toTaggedMessage({
               file_tree: githubData.fileTree,
+              file_tree_note: fileTreeNote,
               readme: githubData.readme,
             }),
             apiKey,
@@ -598,6 +637,7 @@ export async function POST(request: Request) {
               userPrompt: toTaggedMessage({
                 explanation,
                 file_tree: githubData.fileTree,
+                file_tree_note: fileTreeNote,
                 repo_owner: username,
                 repo_name: repo,
                 previous_graph: previousGraphRaw,
@@ -825,6 +865,7 @@ export async function POST(request: Request) {
             graph_attempts: audit.graphAttempts,
             latest_session_audit: audit,
             generated_at: audit.updatedAt,
+            sampled: sampleInfo ?? undefined,
           });
         } catch (error) {
           if (isAbortError(error)) {

@@ -50,6 +50,12 @@ from app.services.pricing import (
     create_cost_summary,
     sum_generation_usage,
 )
+from app.services.tree_budget import (
+    MIN_TREE_TOKEN_BUDGET,
+    TRUNCATION_TOKEN_MARGIN,
+    build_file_tree_sample_note,
+    fit_file_tree_to_token_budget,
+)
 
 router = APIRouter(prefix="/generate", tags=["AI"])
 
@@ -319,24 +325,47 @@ async def get_generation_cost(request: Request):
             parsed.repo,
             parsed.github_pat,
         )
-        estimate = await estimate_generation_cost(
-            provider=provider,
-            model=model,
-            file_tree=github_data.file_tree,
-            readme=github_data.readme,
-            username=parsed.username,
-            repo=parsed.repo,
-            api_key=parsed.api_key,
-            prefer_exact_input_token_count=should_use_exact_input_token_count(
-                provider,
-                parsed.api_key,
-            ),
+
+        async def run_estimate():
+            return await estimate_generation_cost(
+                provider=provider,
+                model=model,
+                file_tree=github_data.file_tree,
+                readme=github_data.readme,
+                username=parsed.username,
+                repo=parsed.repo,
+                api_key=parsed.api_key,
+                prefer_exact_input_token_count=should_use_exact_input_token_count(
+                    provider,
+                    parsed.api_key,
+                ),
+            )
+
+        estimate = await run_estimate()
+
+        input_token_limit = (
+            HARD_GENERATION_INPUT_TOKEN_LIMIT
+            if parsed.api_key
+            else FREE_GENERATION_INPUT_TOKEN_LIMIT
         )
+        sample_info = None
+        if estimate["explanation_input_tokens"] > input_token_limit:
+            tree_tokens = openai_service.estimate_tokens(github_data.file_tree)
+            overage = estimate["explanation_input_tokens"] - input_token_limit
+            tree_budget = tree_tokens - overage - TRUNCATION_TOKEN_MARGIN
+            if tree_budget >= MIN_TREE_TOKEN_BUDGET:
+                fitted = fit_file_tree_to_token_budget(github_data.file_tree, tree_budget)
+                if fitted.sample is not None:
+                    github_data.file_tree = fitted.file_tree
+                    sample_info = fitted.sample
+                    estimate = await run_estimate()
+
         pricing = estimate["pricing"]
 
         response_payload = {
             "ok": True,
             "cost": estimate["cost_summary"]["display"],
+            **({"sampled": sample_info.to_wire()} if sample_info else {}),
             "cost_summary": estimate["cost_summary"],
             "model": model,
             "pricing_model": estimate["pricing_model"],
@@ -532,21 +561,48 @@ async def generate_stream(request: Request):
             await _ensure_client_connected(request)
             storage_visibility = "private" if getattr(github_data, "is_private", False) else "public"
             provider_label = get_provider_label(provider)
-            estimate = await estimate_generation_cost(
-                provider=provider,
-                model=model,
-                file_tree=github_data.file_tree,
-                readme=github_data.readme,
-                username=parsed.username,
-                repo=parsed.repo,
-                api_key=parsed.api_key,
-                prefer_exact_input_token_count=should_use_exact_input_token_count(
-                    provider,
-                    parsed.api_key,
-                ),
+
+            async def run_estimate():
+                return await estimate_generation_cost(
+                    provider=provider,
+                    model=model,
+                    file_tree=github_data.file_tree,
+                    readme=github_data.readme,
+                    username=parsed.username,
+                    repo=parsed.repo,
+                    api_key=parsed.api_key,
+                    prefer_exact_input_token_count=should_use_exact_input_token_count(
+                        provider,
+                        parsed.api_key,
+                    ),
+                )
+
+            estimate = await run_estimate()
+
+            input_token_limit = (
+                HARD_GENERATION_INPUT_TOKEN_LIMIT
+                if parsed.api_key
+                else FREE_GENERATION_INPUT_TOKEN_LIMIT
             )
+            sample_info = None
+            if estimate["explanation_input_tokens"] > input_token_limit:
+                tree_tokens = openai_service.estimate_tokens(github_data.file_tree)
+                overage = estimate["explanation_input_tokens"] - input_token_limit
+                tree_budget = tree_tokens - overage - TRUNCATION_TOKEN_MARGIN
+                if tree_budget >= MIN_TREE_TOKEN_BUDGET:
+                    fitted = fit_file_tree_to_token_budget(github_data.file_tree, tree_budget)
+                    if fitted.sample is not None:
+                        github_data.file_tree = fitted.file_tree
+                        sample_info = fitted.sample
+                        estimate = await run_estimate()
+            file_tree_note = (
+                build_file_tree_sample_note(sample_info) if sample_info else None
+            )
+            sampled_wire = sample_info.to_wire() if sample_info else None
             token_count = estimate["explanation_input_tokens"]
 
+            if sampled_wire is not None:
+                audit = {**audit, "sampled": sampled_wire}
             audit = _append_stage_usage(
                 _set_estimated_cost(audit, estimate["cost_summary"]),
                 {
@@ -556,14 +612,15 @@ async def generate_stream(request: Request):
                     "createdAt": _now_iso(),
                 },
             )
-            yield send(
-                {
-                    "status": "started",
-                    "session_id": audit["sessionId"],
-                    "message": "Starting generation process...",
-                    "cost_summary": estimate["cost_summary"],
-                }
-            )
+            started_payload = {
+                "status": "started",
+                "session_id": audit["sessionId"],
+                "message": "Starting generation process...",
+                "cost_summary": estimate["cost_summary"],
+            }
+            if sampled_wire is not None:
+                started_payload["sampled"] = sampled_wire
+            yield send(started_payload)
 
             await _ensure_client_connected(request)
             if should_apply_complimentary_gate(
@@ -708,7 +765,11 @@ async def generate_stream(request: Request):
                 provider=provider,
                 model=model,
                 system_prompt=SYSTEM_FIRST_PROMPT,
-                data={"file_tree": github_data.file_tree, "readme": github_data.readme},
+                data={
+                    "file_tree": github_data.file_tree,
+                    "file_tree_note": file_tree_note,
+                    "readme": github_data.readme,
+                },
                 api_key=parsed.api_key,
                 reasoning_effort="medium",
                 max_output_tokens=EXPLANATION_MAX_OUTPUT_TOKENS,
@@ -786,6 +847,7 @@ async def generate_stream(request: Request):
                     data={
                         "explanation": explanation,
                         "file_tree": github_data.file_tree,
+                        "file_tree_note": file_tree_note,
                         "repo_owner": parsed.username,
                         "repo_name": parsed.repo,
                         "previous_graph": previous_graph,
@@ -952,19 +1014,20 @@ async def generate_stream(request: Request):
                     stargazer_count=getattr(github_data, "stargazer_count", None),
                 )
 
-            yield send(
-                {
-                    "status": "complete",
-                    "session_id": audit["sessionId"],
-                    "cost_summary": audit.get("finalCost") or audit.get("estimatedCost"),
-                    "diagram": diagram,
-                    "explanation": explanation,
-                    "graph": valid_graph.model_dump(by_alias=True),
-                    "graph_attempts": audit["graphAttempts"],
-                    "latest_session_audit": audit,
-                    "generated_at": audit["updatedAt"],
-                }
-            )
+            complete_payload = {
+                "status": "complete",
+                "session_id": audit["sessionId"],
+                "cost_summary": audit.get("finalCost") or audit.get("estimatedCost"),
+                "diagram": diagram,
+                "explanation": explanation,
+                "graph": valid_graph.model_dump(by_alias=True),
+                "graph_attempts": audit["graphAttempts"],
+                "latest_session_audit": audit,
+                "generated_at": audit["updatedAt"],
+            }
+            if sampled_wire is not None:
+                complete_payload["sampled"] = sampled_wire
+            yield send(complete_payload)
         except _ClientDisconnectedError:
             was_cancelled = True
         except Exception as exc:

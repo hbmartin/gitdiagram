@@ -1,6 +1,7 @@
 import type { GenerationCostSummary } from "~/features/diagram/cost";
 import type {
   DiagramGraph,
+  DiagramSampleInfo,
   GenerationSessionAudit,
   GraphAttemptAudit,
 } from "~/features/diagram/graph";
@@ -34,6 +35,7 @@ export interface DiagramStreamState {
   validationError?: string;
   failureStage?: string;
   latestSessionAudit?: GenerationSessionAudit;
+  sampled?: DiagramSampleInfo;
 }
 
 export interface DiagramStreamMessage {
@@ -53,6 +55,7 @@ export interface DiagramStreamMessage {
   failure_stage?: string;
   latest_session_audit?: GenerationSessionAudit;
   generated_at?: string;
+  sampled?: DiagramSampleInfo;
 }
 
 export interface DiagramCostResponse {
