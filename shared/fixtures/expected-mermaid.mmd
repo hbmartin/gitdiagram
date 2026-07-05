@@ -1,0 +1,33 @@
+flowchart TD
+
+subgraph group_frontend["Frontend"]
+  node_web_app["Web App<br/>Next.js UI"]
+  node_diagram_view["Diagram Viewer"]
+end
+
+subgraph group_backend["Backend"]
+  node_api{{"Generation API<br/>FastAPI service<br/>[generate.py]"}}
+  node_storage[("Artifact Store<br/>object storage")]
+end
+
+node_github(("GitHub API<br/>external service"))
+
+node_web_app -->|"SSE generate"| node_api
+node_api -.->|"persist artifact"| node_storage
+node_api --> node_github
+node_web_app -->|"renders"| node_diagram_view
+
+click node_web_app "https://github.com/acme/demo/tree/main/src/app"
+click node_diagram_view "https://github.com/acme/demo/blob/main/src/components/mermaid-diagram.tsx"
+click node_api "https://github.com/acme/demo/blob/main/backend/app/routers/generate.py"
+
+classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
+classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
+classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
+classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
+classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
+class node_web_app,node_diagram_view toneBlue
+class node_api,node_storage toneAmber
+class node_github toneNeutral

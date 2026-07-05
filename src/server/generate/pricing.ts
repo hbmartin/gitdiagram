@@ -25,7 +25,7 @@ export const GRAPH_MAX_OUTPUT_TOKENS = 6000;
 
 const DEFAULT_PRICING_MODEL = "gpt-5.4-mini";
 
-const MODEL_PRICING: Record<string, ModelPricing> = {
+export const MODEL_PRICING: Record<string, ModelPricing> = {
   "deepseek-v3-0324": { inputPerMillionUsd: 0.216, outputPerMillionUsd: 0.88 },
   "gpt-5.4": { inputPerMillionUsd: 2.5, outputPerMillionUsd: 15.0 },
   "gpt-5.4-pro": { inputPerMillionUsd: 30.0, outputPerMillionUsd: 180.0 },
