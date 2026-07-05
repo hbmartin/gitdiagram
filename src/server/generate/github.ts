@@ -1,5 +1,13 @@
 import { getGitHubApiHeaders } from "../github-auth";
 
+// GITHUB_API_BASE_URL supports GitHub Enterprise hosts and test mocks.
+function githubApiBase(): string {
+  return (
+    process.env.GITHUB_API_BASE_URL?.trim().replace(/\/$/, "") ||
+    "https://api.github.com"
+  );
+}
+
 interface GitHubRepoResponse {
   default_branch?: string;
   private?: boolean;
@@ -115,7 +123,7 @@ async function getRepoMetadata(
   stargazerCount: number | null;
 }> {
   const data = await fetchJson<GitHubRepoResponse>(
-    `https://api.github.com/repos/${username}/${repo}`,
+    `${githubApiBase()}/repos/${username}/${repo}`,
     headers,
     "Repository not found.",
     signal,
@@ -139,7 +147,7 @@ async function resolveCommitSha(
 ): Promise<string | null> {
   try {
     const data = await fetchJson<GitHubCommitResponse>(
-      `https://api.github.com/repos/${username}/${repo}/commits/${encodeURIComponent(ref)}`,
+      `${githubApiBase()}/repos/${username}/${repo}/commits/${encodeURIComponent(ref)}`,
       headers,
       `Branch, tag, or commit "${ref}" was not found in the repository.`,
       signal,
@@ -168,7 +176,7 @@ async function getFileTree(
   signal?: AbortSignal,
 ): Promise<string> {
   const data = await fetchJson<GitHubTreeResponse>(
-    `https://api.github.com/repos/${username}/${repo}/git/trees/${encodeURIComponent(treeRef)}?recursive=1`,
+    `${githubApiBase()}/repos/${username}/${repo}/git/trees/${encodeURIComponent(treeRef)}?recursive=1`,
     headers,
     "Could not fetch repository file tree.",
     signal,
@@ -234,7 +242,7 @@ async function getReadme(
   if (subdir) {
     try {
       return await fetchReadmeContent(
-        `https://api.github.com/repos/${username}/${repo}/readme/${subdir
+        `${githubApiBase()}/repos/${username}/${repo}/readme/${subdir
           .split("/")
           .map(encodeURIComponent)
           .join("/")}${refQuery}`,
@@ -247,7 +255,7 @@ async function getReadme(
   }
 
   return fetchReadmeContent(
-    `https://api.github.com/repos/${username}/${repo}/readme${refQuery}`,
+    `${githubApiBase()}/repos/${username}/${repo}/readme${refQuery}`,
     headers,
     signal,
   );

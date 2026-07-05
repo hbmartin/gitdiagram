@@ -203,12 +203,22 @@ class _R2ArtifactStore:
             return self._s3_client
         if not self.is_configured():
             raise ValueError("Missing R2 configuration.")
+        # R2_ENDPOINT overrides the Cloudflare endpoint for any S3-compatible
+        # store (MinIO, LocalStack, e2e mocks); those need path-style addressing.
+        endpoint_override = (os.getenv("R2_ENDPOINT") or "").strip() or None
+        client_kwargs = {}
+        if endpoint_override:
+            from botocore.config import Config as _BotoConfig
+
+            client_kwargs["config"] = _BotoConfig(s3={"addressing_style": "path"})
         self._s3_client = boto3.client(
             "s3",
-            endpoint_url=f"https://{self.account_id}.r2.cloudflarestorage.com",
+            endpoint_url=endpoint_override
+            or f"https://{self.account_id}.r2.cloudflarestorage.com",
             aws_access_key_id=self.access_key_id,
             aws_secret_access_key=self.secret_access_key,
             region_name="auto",
+            **client_kwargs,
         )
         return self._s3_client
 

@@ -11,6 +11,11 @@ import jwt
 import requests
 
 REPOSITORY_TOO_LARGE_ERROR = "Repository is too large (>195k tokens) for analysis. Try a smaller repo."
+
+
+def _github_api_base() -> str:
+    # GITHUB_API_BASE_URL supports GitHub Enterprise hosts and test mocks.
+    return (os.getenv("GITHUB_API_BASE_URL") or "").strip().rstrip("/") or "https://api.github.com"
 MAX_INCLUDED_FILE_TREE_CHARACTERS = 780_000
 MAX_README_BYTES = 750_000
 
@@ -175,7 +180,7 @@ class GitHubService:
 
     def get_repo_metadata(self, username: str, repo: str) -> tuple[str, bool, int | None]:
         data = _fetch_json(
-            f"https://api.github.com/repos/{username}/{repo}",
+            f"{_github_api_base()}/repos/{username}/{repo}",
             self._get_headers(),
             "Repository not found.",
         )
@@ -189,7 +194,7 @@ class GitHubService:
     ) -> str | None:
         try:
             data = _fetch_json(
-                f"https://api.github.com/repos/{username}/{repo}/commits/{urllib.parse.quote(ref, safe='')}",
+                f"{_github_api_base()}/repos/{username}/{repo}/commits/{urllib.parse.quote(ref, safe='')}",
                 self._get_headers(),
                 f'Branch, tag, or commit "{ref}" was not found in the repository.',
             )
@@ -206,7 +211,7 @@ class GitHubService:
         self, username: str, repo: str, branch: str, subdir: str | None = None
     ) -> str:
         data = _fetch_json(
-            f"https://api.github.com/repos/{username}/{repo}/git/trees/{urllib.parse.quote(branch, safe='')}?recursive=1",
+            f"{_github_api_base()}/repos/{username}/{repo}/git/trees/{urllib.parse.quote(branch, safe='')}?recursive=1",
             self._get_headers(),
             "Could not fetch repository file tree.",
         )
@@ -246,7 +251,7 @@ class GitHubService:
             try:
                 return self._read_readme_payload(
                     _fetch_json(
-                        f"https://api.github.com/repos/{username}/{repo}/readme/{subdir_path}{ref_query}",
+                        f"{_github_api_base()}/repos/{username}/{repo}/readme/{subdir_path}{ref_query}",
                         self._get_headers(),
                         "No README found for the specified repository.",
                     )
@@ -255,7 +260,7 @@ class GitHubService:
                 pass  # Fall back to the repository root README below.
 
         data = _fetch_json(
-            f"https://api.github.com/repos/{username}/{repo}/readme{ref_query}",
+            f"{_github_api_base()}/repos/{username}/{repo}/readme{ref_query}",
             self._get_headers(),
             "No README found for the specified repository.",
         )

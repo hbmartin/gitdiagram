@@ -7,7 +7,11 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 
-import { assertLiveStorageAllowedForTests, readRequiredEnv } from "./config";
+import {
+  assertLiveStorageAllowedForTests,
+  readEnv,
+  readRequiredEnv,
+} from "./config";
 
 let client: S3Client | null = null;
 
@@ -18,9 +22,15 @@ function getClient(): S3Client {
     return client;
   }
 
+  // R2_ENDPOINT overrides the Cloudflare endpoint for any S3-compatible
+  // store (MinIO, LocalStack, e2e mocks); those need path-style addressing.
+  const endpointOverride = readEnv("R2_ENDPOINT");
   client = new S3Client({
     region: "auto",
-    endpoint: `https://${readRequiredEnv("R2_ACCOUNT_ID")}.r2.cloudflarestorage.com`,
+    endpoint:
+      endpointOverride ??
+      `https://${readRequiredEnv("R2_ACCOUNT_ID")}.r2.cloudflarestorage.com`,
+    forcePathStyle: Boolean(endpointOverride),
     credentials: {
       accessKeyId: readRequiredEnv("R2_ACCESS_KEY_ID"),
       secretAccessKey: readRequiredEnv("R2_SECRET_ACCESS_KEY"),

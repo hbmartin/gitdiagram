@@ -9,7 +9,8 @@ type EmbedPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export const revalidate = 300;
+// Reading search params (?ref=&subdir=) requires dynamic rendering.
+export const dynamic = "force-dynamic";
 
 function firstParam(value: string | string[] | undefined): string | null {
   const first = Array.isArray(value) ? value[0] : value;

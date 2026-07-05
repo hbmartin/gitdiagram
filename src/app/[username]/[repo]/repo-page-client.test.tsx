@@ -15,6 +15,7 @@ vi.mock("~/hooks/useStarReminder", () => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock("~/components/main-card", () => ({

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { DiagramStateResponse } from "~/features/diagram/types";
 import { parseGitHubRepoUrl } from "~/features/diagram/github-url";
 import {
@@ -29,8 +29,6 @@ import type { RepoStaleness } from "~/server/repo-staleness";
 type RepoPageClientProps = {
   username: string;
   repo: string;
-  diagramRef?: string | null;
-  subdir?: string | null;
   initialState?: DiagramStateResponse | null;
   staleness?: RepoStaleness | null;
 };
@@ -38,11 +36,22 @@ type RepoPageClientProps = {
 export default function RepoPageClient({
   username,
   repo,
-  diagramRef = null,
-  subdir = null,
   initialState = null,
   staleness = null,
 }: RepoPageClientProps) {
+  // The server page is static (ISR) and cannot read search params; the
+  // ref/subdir variant scope is resolved here on the client instead.
+  const searchParams = useSearchParams();
+  const diagramRef = searchParams.get("ref")?.trim() || null;
+  const subdir = searchParams.get("subdir")?.trim() || null;
+  const isScopedVariant = Boolean(diagramRef || subdir);
+
+  // The server-provided initial state is always the default variant, so a
+  // scoped page must resolve its own state from scratch.
+  if (isScopedVariant) {
+    initialState = null;
+    staleness = null;
+  }
   const [zoomingEnabled, setZoomingEnabled] = useState(false);
   const [diagramRendered, setDiagramRendered] = useState(false);
   const [drillTarget, setDrillTarget] = useState<DrillDownTarget | null>(null);
