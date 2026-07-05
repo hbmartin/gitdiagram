@@ -22,6 +22,8 @@ import {
   VersionHistory,
   type DiagramVersionView,
 } from "~/components/version-history";
+import { MermaidEditor } from "~/components/mermaid-editor";
+import { Pencil } from "lucide-react";
 import type { RepoStaleness } from "~/server/repo-staleness";
 
 type RepoPageClientProps = {
@@ -47,6 +49,8 @@ export default function RepoPageClient({
   const [viewedVersion, setViewedVersion] = useState<DiagramVersionView | null>(
     null,
   );
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editedDiagram, setEditedDiagram] = useState<string | null>(null);
   const router = useRouter();
 
   useStarReminder();
@@ -78,9 +82,23 @@ export default function RepoPageClient({
 
   const hasDiagram = Boolean(diagram);
   const hasError = Boolean(error || state.error);
-  const displayedDiagram = viewedVersion?.diagram ?? diagram;
+  const displayedDiagram = viewedVersion?.diagram ?? editedDiagram ?? diagram;
   const showStalenessBanner =
     !viewedVersion && Boolean(staleness && staleness.aheadBy > 0);
+
+  // Local edits belong to the diagram they were made on; drop them when the
+  // underlying generated diagram changes (regeneration, new data).
+  useEffect(() => {
+    setEditedDiagram(null);
+  }, [diagram]);
+
+  const handleCopyDisplayed = useCallback(() => {
+    if (editedDiagram && !viewedVersion) {
+      void navigator.clipboard.writeText(editedDiagram);
+      return;
+    }
+    handleCopy();
+  }, [editedDiagram, handleCopy, viewedVersion]);
 
   const handleDiagramRenderComplete = useCallback(() => {
     setDiagramRendered(true);
@@ -132,7 +150,7 @@ export default function RepoPageClient({
           username={normalizedUsername}
           repo={normalizedRepo}
           hasDiagram={hasDiagram}
-          onCopy={handleCopy}
+          onCopy={handleCopyDisplayed}
           lastGenerated={lastGenerated}
           actualCost={
             state.costSummary?.kind === "actual"
@@ -220,14 +238,37 @@ export default function RepoPageClient({
                     </button>
                   </div>
                 )}
-                <VersionHistory
-                  username={normalizedUsername}
-                  repo={normalizedRepo}
-                  diagramRef={diagramRef}
-                  subdir={subdir}
-                  activeVersionId={viewedVersion?.id ?? null}
-                  onSelectVersion={setViewedVersion}
-                />
+                <div className="flex w-full max-w-3xl flex-wrap items-center gap-4">
+                  <VersionHistory
+                    username={normalizedUsername}
+                    repo={normalizedRepo}
+                    diagramRef={diagramRef}
+                    subdir={subdir}
+                    activeVersionId={viewedVersion?.id ?? null}
+                    onSelectVersion={setViewedVersion}
+                  />
+                  {!viewedVersion && (
+                    <button
+                      type="button"
+                      onClick={() => setEditorOpen((prev) => !prev)}
+                      aria-expanded={editorOpen}
+                      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-gray-700 hover:bg-purple-100 dark:text-neutral-300 dark:hover:bg-purple-950"
+                    >
+                      <Pencil size={15} />
+                      {editorOpen ? "Close editor" : "Edit diagram"}
+                    </button>
+                  )}
+                </div>
+                {editorOpen && !viewedVersion && (
+                  <MermaidEditor
+                    value={editedDiagram ?? diagram}
+                    onApply={(next) =>
+                      setEditedDiagram(next === diagram ? null : next)
+                    }
+                    onReset={() => setEditedDiagram(null)}
+                    isEdited={Boolean(editedDiagram)}
+                  />
+                )}
                 <div className="flex w-full justify-center px-4">
                   <MermaidChart
                     chart={displayedDiagram}
