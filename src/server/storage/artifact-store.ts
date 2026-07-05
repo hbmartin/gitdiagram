@@ -134,7 +134,7 @@ export async function writeDiagramArtifact(params: {
   ref?: string | null;
   subdir?: string | null;
   commitSha?: string | null;
-}): Promise<void> {
+}): Promise<DiagramArtifact> {
   const location =
     params.visibility === "private"
       ? getPrivateLocation(
@@ -164,6 +164,7 @@ export async function writeDiagramArtifact(params: {
   };
 
   await putJsonObject(location.bucket, location.artifactKey, artifact);
+  return artifact;
 }
 
 export async function updateArtifactLatestSessionSummary(params: {

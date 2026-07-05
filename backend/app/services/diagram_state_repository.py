@@ -5,6 +5,7 @@ import hmac
 import json
 import urllib.parse
 import os
+from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -56,6 +57,9 @@ def _read_env(name: str) -> str | None:
 
 def _normalize_segment(value: str) -> str:
     return quote(value.strip().lower(), safe="")
+
+
+MAX_HISTORY_ENTRIES = 20
 
 
 def _repo_key(username: str, repo: str) -> str:
@@ -229,6 +233,9 @@ class _R2ArtifactStore:
             Body=json.dumps(payload).encode("utf-8"),
             ContentType="application/json",
         )
+
+    def delete_object(self, bucket: str, key: str) -> None:
+        self._get_client().delete_object(Bucket=bucket, Key=key)
 
     def _normalize_browse_index_entries(
         self,
@@ -404,7 +411,74 @@ class _R2ArtifactStore:
             "commitSha": commit_sha,
         }
         self.put_json_object(bucket, artifact_key, payload)
+        try:
+            self._append_version_history(
+                bucket=bucket,
+                artifact_key=artifact_key,
+                payload=payload,
+            )
+        except Exception:
+            # Version history is best-effort; the primary artifact is saved.
+            pass
         return bucket, artifact_key, status_key
+
+    def _append_version_history(
+        self,
+        *,
+        bucket: str,
+        artifact_key: str,
+        payload: dict[str, Any],
+    ) -> None:
+        # Mirrors src/server/storage/version-history.ts.
+        generated_at = payload.get("generatedAt")
+        if not generated_at:
+            return
+        base = artifact_key[: -len(".json")] if artifact_key.endswith(".json") else artifact_key
+        entry_key = f"{base}/history/{urllib.parse.quote(str(generated_at), safe='')}.json"
+        index_key = f"{base}/history/index.json"
+
+        self.put_json_object(bucket, entry_key, payload)
+
+        index = self.get_json_object(bucket, index_key) or {
+            "version": 1,
+            "updatedAt": "",
+            "entries": [],
+        }
+        latest_summary = payload.get("latestSessionSummary") or {}
+        entry = {
+            "id": generated_at,
+            "generatedAt": generated_at,
+            "commitSha": payload.get("commitSha"),
+            "ref": payload.get("ref"),
+            "subdir": payload.get("subdir"),
+            "model": latest_summary.get("model"),
+            "key": entry_key,
+        }
+        entries = [entry] + [
+            candidate
+            for candidate in index.get("entries", [])
+            if candidate.get("id") != generated_at
+        ]
+        kept = entries[:MAX_HISTORY_ENTRIES]
+        evicted = entries[MAX_HISTORY_ENTRIES:]
+
+        self.put_json_object(
+            bucket,
+            index_key,
+            {
+                "version": 1,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+                "entries": kept,
+            },
+        )
+        for evicted_entry in evicted:
+            key = evicted_entry.get("key")
+            if not key:
+                continue
+            try:
+                self.delete_object(bucket, key)
+            except Exception:
+                pass
 
 
 class _UpstashClient:

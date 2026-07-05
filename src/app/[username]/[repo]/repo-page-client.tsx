@@ -18,6 +18,11 @@ import { ApiKeyButton } from "~/components/api-key-button";
 import { useStarReminder } from "~/hooks/useStarReminder";
 import { SponsorSlot } from "~/components/sponsor-slot";
 import { SampledIndicator } from "~/components/sampled-indicator";
+import {
+  VersionHistory,
+  type DiagramVersionView,
+} from "~/components/version-history";
+import type { RepoStaleness } from "~/server/repo-staleness";
 
 type RepoPageClientProps = {
   username: string;
@@ -25,6 +30,7 @@ type RepoPageClientProps = {
   diagramRef?: string | null;
   subdir?: string | null;
   initialState?: DiagramStateResponse | null;
+  staleness?: RepoStaleness | null;
 };
 
 export default function RepoPageClient({
@@ -33,10 +39,14 @@ export default function RepoPageClient({
   diagramRef = null,
   subdir = null,
   initialState = null,
+  staleness = null,
 }: RepoPageClientProps) {
   const [zoomingEnabled, setZoomingEnabled] = useState(false);
   const [diagramRendered, setDiagramRendered] = useState(false);
   const [drillTarget, setDrillTarget] = useState<DrillDownTarget | null>(null);
+  const [viewedVersion, setViewedVersion] = useState<DiagramVersionView | null>(
+    null,
+  );
   const router = useRouter();
 
   useStarReminder();
@@ -67,6 +77,9 @@ export default function RepoPageClient({
 
   const hasDiagram = Boolean(diagram);
   const hasError = Boolean(error || state.error);
+  const displayedDiagram = viewedVersion?.diagram ?? diagram;
+  const showStalenessBanner =
+    !viewedVersion && Boolean(staleness && staleness.aheadBy > 0);
 
   const handleDiagramRenderComplete = useCallback(() => {
     setDiagramRendered(true);
@@ -108,7 +121,7 @@ export default function RepoPageClient({
 
   useEffect(() => {
     setDiagramRendered(false);
-  }, [diagram, zoomingEnabled]);
+  }, [displayedDiagram, zoomingEnabled]);
 
   return (
     <div className="flex flex-col items-center p-4">
@@ -164,9 +177,58 @@ export default function RepoPageClient({
             {hasDiagram && (
               <>
                 <SampledIndicator sampled={state.sampled} />
+                {showStalenessBanner && staleness && (
+                  <div
+                    role="note"
+                    className="mx-4 flex max-w-3xl flex-wrap items-center gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-200"
+                  >
+                    <span>
+                      This diagram was generated at commit{" "}
+                      <code>{staleness.commitSha.slice(0, 7)}</code> — the
+                      repository has moved{" "}
+                      {staleness.aheadBy.toLocaleString("en-US")} commit
+                      {staleness.aheadBy === 1 ? "" : "s"} since. Use
+                      “Regenerate Diagram” to refresh it.
+                    </span>
+                  </div>
+                )}
+                {viewedVersion && (
+                  <div
+                    role="note"
+                    className="mx-4 flex max-w-3xl flex-wrap items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-3 py-2 text-sm text-purple-900 dark:border-purple-700 dark:bg-purple-950 dark:text-purple-200"
+                  >
+                    <span>
+                      Viewing the version generated on{" "}
+                      {new Date(viewedVersion.generatedAt).toLocaleString()}
+                      {viewedVersion.commitSha ? (
+                        <>
+                          {" "}
+                          at commit{" "}
+                          <code>{viewedVersion.commitSha.slice(0, 7)}</code>
+                        </>
+                      ) : null}
+                      .
+                    </span>
+                    <button
+                      type="button"
+                      className="font-medium underline"
+                      onClick={() => setViewedVersion(null)}
+                    >
+                      Back to latest
+                    </button>
+                  </div>
+                )}
+                <VersionHistory
+                  username={normalizedUsername}
+                  repo={normalizedRepo}
+                  diagramRef={diagramRef}
+                  subdir={subdir}
+                  activeVersionId={viewedVersion?.id ?? null}
+                  onSelectVersion={setViewedVersion}
+                />
                 <div className="flex w-full justify-center px-4">
                   <MermaidChart
-                    chart={diagram}
+                    chart={displayedDiagram}
                     zoomingEnabled={zoomingEnabled}
                     onRenderError={handleDiagramRenderError}
                     onRenderComplete={handleDiagramRenderComplete}

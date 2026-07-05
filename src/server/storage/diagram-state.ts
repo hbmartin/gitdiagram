@@ -15,6 +15,7 @@ import {
   writeFailureSummary,
 } from "~/server/storage/status-store";
 import { upsertBrowseIndexEntry } from "~/server/storage/browse-diagrams";
+import { appendDiagramVersion } from "~/server/storage/version-history";
 import type { RepoVariant } from "~/server/storage/cache-key";
 import type { ArtifactVisibility } from "~/server/storage/types";
 
@@ -132,7 +133,7 @@ export async function saveSuccessfulDiagramState(params: {
 }) {
   const successfulAt = params.audit.updatedAt || new Date().toISOString();
 
-  await writeDiagramArtifact({
+  const artifact = await writeDiagramArtifact({
     username: params.username,
     repo: params.repo,
     githubPat: params.githubPat,
@@ -150,6 +151,20 @@ export async function saveSuccessfulDiagramState(params: {
     subdir: params.subdir,
     commitSha: params.commitSha,
   });
+
+  try {
+    await appendDiagramVersion({
+      username: params.username,
+      repo: params.repo,
+      githubPat: params.githubPat,
+      visibility: params.visibility,
+      variant: params.variant,
+      artifact,
+    });
+  } catch (error) {
+    // Version history is best-effort; the primary artifact is already saved.
+    console.error("Failed to append diagram version history:", error);
+  }
 
   await clearFailureSummary({
     username: params.username,

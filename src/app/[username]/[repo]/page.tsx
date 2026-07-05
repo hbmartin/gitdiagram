@@ -3,6 +3,7 @@ import { unstable_cache } from "next/cache";
 import type { DiagramStateResponse } from "~/features/diagram/types";
 import { getStoredDiagramState } from "~/server/storage/artifact-store";
 import { getPublicDiagramStateCacheTag } from "~/server/storage/repo-page-cache";
+import { getRepoStaleness } from "~/server/repo-staleness";
 import RepoPageClient from "./repo-page-client";
 
 type RepoPageProps = {
@@ -84,6 +85,16 @@ export default async function Repo({ params, searchParams }: RepoPageProps) {
       )) as DiagramStateResponse | null)
     : null;
 
+  const staleness =
+    initialState?.diagram && initialState.commitSha
+      ? await getRepoStaleness({
+          username,
+          repo,
+          commitSha: initialState.commitSha,
+          ref: initialState.ref,
+        })
+      : null;
+
   return (
     <RepoPageClient
       username={username}
@@ -91,6 +102,7 @@ export default async function Repo({ params, searchParams }: RepoPageProps) {
       diagramRef={ref}
       subdir={subdir}
       initialState={initialState?.diagram ? initialState : null}
+      staleness={staleness}
     />
   );
 }
