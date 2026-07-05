@@ -14,12 +14,10 @@ export interface GitHubAuthSource {
   getToken: () => Promise<string>;
 }
 
-let cachedInstallationToken:
-  | {
-      token: string;
-      expiresAtMs: number;
-    }
-  | null = null;
+let cachedInstallationToken: {
+  token: string;
+  expiresAtMs: number;
+} | null = null;
 
 function readTrimmedEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -61,8 +59,8 @@ function createGitHubAppJwt() {
 export function hasGitHubAppAuth() {
   return Boolean(
     readTrimmedEnv("GITHUB_PRIVATE_KEY") &&
-      (readTrimmedEnv("GITHUB_APP_ID") || readTrimmedEnv("GITHUB_CLIENT_ID")) &&
-      readTrimmedEnv("GITHUB_INSTALLATION_ID"),
+    (readTrimmedEnv("GITHUB_APP_ID") || readTrimmedEnv("GITHUB_CLIENT_ID")) &&
+    readTrimmedEnv("GITHUB_INSTALLATION_ID"),
   );
 }
 
@@ -114,7 +112,9 @@ export async function getGitHubAppInstallationToken() {
 
   const payload = (await response.json()) as InstallationTokenResponse;
   if (!payload.token) {
-    throw new Error("GitHub App installation token response did not include a token.");
+    throw new Error(
+      "GitHub App installation token response did not include a token.",
+    );
   }
 
   cachedInstallationToken = {
@@ -157,7 +157,7 @@ export async function getGitHubApiHeaders(options?: {
     githubPat ||
     (allowGitHubAppAuth && hasGitHubAppAuth()
       ? await getGitHubAppInstallationToken()
-      : readGitHubPatPool()[0] ?? null);
+      : (readGitHubPatPool()[0] ?? null));
 
   if (!token) {
     return {

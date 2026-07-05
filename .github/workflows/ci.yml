@@ -19,10 +19,18 @@ jobs:
         run: bun ci
       - name: Lint
         run: bun run lint
+      - name: Format check
+        run: bun run format:check
       - name: Typecheck
         run: bun run typecheck
-      - name: Frontend tests
-        run: bun run test
+      - name: Frontend tests (with coverage)
+        run: bun run test:coverage
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: coverage/lcov.info
+          if-no-files-found: warn
       - name: Build
         run: bun run build
 
@@ -48,3 +56,10 @@ jobs:
         run: cd backend && uv run python -m compileall app
       - name: Backend tests
         run: cd backend && uv run pytest -q
+
+  backend-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: Build backend image
+        run: docker build -t gitdiagram-backend:ci backend

@@ -33,6 +33,5 @@ export function exportMermaidSvgAsPng(svgElement: SVGSVGElement): void {
   };
 
   img.src =
-    "data:image/svg+xml;base64," +
-    btoa(unescape(encodeURIComponent(svgData)));
+    "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgData)));
 }

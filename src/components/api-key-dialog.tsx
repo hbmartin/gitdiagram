@@ -3,10 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 
-import {
-  clearStoredOpenAiKey,
-  getStoredOpenAiKey,
-} from "~/lib/openai-key";
+import { clearStoredOpenAiKey, getStoredOpenAiKey } from "~/lib/openai-key";
 
 import { Button } from "./ui/button";
 import {
@@ -63,8 +60,8 @@ export function ApiKeyDialog({ isOpen, onClose, onSubmit }: ApiKeyDialogProps) {
         >
           <div className="text-sm">
             GitDiagram offers infinite free diagram generations! You can also
-            provide your own OpenAI API key to generate diagrams at your own cost.
-            The key is stored locally in your browser.
+            provide your own OpenAI API key to generate diagrams at your own
+            cost. The key is stored locally in your browser.
             <br />
             <br />
             <span className="font-medium">Get your OpenAI API key </span>

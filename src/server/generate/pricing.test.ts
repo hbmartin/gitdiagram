@@ -27,7 +27,11 @@ describe("resolvePricingModel", () => {
 
 describe("estimateTextTokenCostUsd", () => {
   it("uses gpt-5.4-mini pricing for cost estimates", () => {
-    const result = estimateTextTokenCostUsd("gpt-5.4-mini", 1_000_000, 1_000_000);
+    const result = estimateTextTokenCostUsd(
+      "gpt-5.4-mini",
+      1_000_000,
+      1_000_000,
+    );
 
     expect(result.pricingModel).toBe("gpt-5.4-mini");
     expect(result.pricing.inputPerMillionUsd).toBe(0.75);

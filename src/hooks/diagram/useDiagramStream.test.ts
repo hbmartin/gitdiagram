@@ -21,7 +21,10 @@ vi.mock("~/features/diagram/api", () => ({
         },
       },
     });
-    await handlers.onMessage({ status: "explanation_chunk", chunk: "Repo details" });
+    await handlers.onMessage({
+      status: "explanation_chunk",
+      chunk: "Repo details",
+    });
     await handlers.onMessage({
       status: "complete",
       cost_summary: {

@@ -1,5 +1,19 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import MermaidChart, {
   getDefaultDiagramScale,
@@ -78,7 +92,9 @@ describe("MermaidChart", () => {
     );
 
     expect(container.querySelector(".mermaid")).toBeInTheDocument();
-    expect(screen.queryByText(/Mermaid render failed:/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Mermaid render failed:/),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps vertical touch scrolling enabled in read-only mode", () => {
@@ -161,8 +177,9 @@ describe("MermaidChart", () => {
       expect(screen.getByText("100%")).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("region", { name: /interactive diagram viewer/i }))
-      .toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: /interactive diagram viewer/i }),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Zoom out")).toBeInTheDocument();
     expect(screen.getByLabelText("Zoom in")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /fit/i })).toBeInTheDocument();
@@ -204,7 +221,9 @@ describe("MermaidChart", () => {
     });
 
     await waitFor(() => {
-      expect((mermaid as HTMLDivElement).style.transform).not.toBe(initialTransform);
+      expect((mermaid as HTMLDivElement).style.transform).not.toBe(
+        initialTransform,
+      );
     });
   });
 

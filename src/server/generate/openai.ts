@@ -102,15 +102,22 @@ function extractChatCompletionText(
   }
 
   return content
-    .map((part) => (part?.type === "text" && typeof part.text === "string" ? part.text : ""))
+    .map((part) =>
+      part?.type === "text" && typeof part.text === "string" ? part.text : "",
+    )
     .join("");
 }
 
-function normalizeChatCompletionUsage(usage: {
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  total_tokens?: number;
-} | null | undefined): GenerationTokenUsage | null {
+function normalizeChatCompletionUsage(
+  usage:
+    | {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      }
+    | null
+    | undefined,
+): GenerationTokenUsage | null {
   if (!usage) {
     return null;
   }
@@ -138,17 +145,17 @@ function buildAtlasStructuredOutputPrompt(params: {
       "Return valid JSON only.",
       'Schema name: "diagram_graph".',
       "Use this exact shape:",
-      '{',
+      "{",
       '  "groups": [{"id": "group_id", "label": "Group", "description": null}],',
       '  "nodes": [{"id": "node_id", "label": "Node", "type": "Subsystem", "description": null, "groupId": null, "path": null, "shape": null}],',
       '  "edges": [{"from": "source_id", "to": "target_id", "label": null, "description": null, "style": null}]',
       "}",
       "Required constraints:",
       '- Always include "groups", "nodes", and "edges".',
-      '- Always include every object field. Use null instead of omitting optional fields.',
+      "- Always include every object field. Use null instead of omitting optional fields.",
       '- "shape" must be one of: box, database, queue, document, circle, hexagon, or null.',
       '- "style" must be one of: solid, dashed, or null.',
-      '- IDs must match ^[a-z][a-z0-9_]*$.',
+      "- IDs must match ^[a-z][a-z0-9_]*$.",
       "- Return JSON only with no markdown fences or commentary.",
     ].join("\n");
   }
@@ -266,8 +273,7 @@ export async function streamCompletion({
       let finalUsage: GenerationTokenUsage | null = null;
       try {
         for await (const chunk of stream) {
-          finalUsage =
-            normalizeChatCompletionUsage(chunk.usage) ?? finalUsage;
+          finalUsage = normalizeChatCompletionUsage(chunk.usage) ?? finalUsage;
           const delta = chunk.choices[0]?.delta?.content;
           if (typeof delta === "string" && delta) {
             yield delta;
@@ -306,11 +312,9 @@ export async function streamCompletion({
 
   let usageSettled = false;
   let resolveUsage!: (usage: GenerationTokenUsage | null) => void;
-  const usagePromise = new Promise<GenerationTokenUsage | null>(
-    (resolve) => {
-      resolveUsage = resolve;
-    },
-  );
+  const usagePromise = new Promise<GenerationTokenUsage | null>((resolve) => {
+    resolveUsage = resolve;
+  });
 
   async function* outputStream(): AsyncGenerator<string, void, void> {
     let responseId: string | undefined;
@@ -364,7 +368,11 @@ export async function streamCompletion({
 
       if (!finalUsage) {
         try {
-          finalUsage = await retrieveUsageFromResponseId(client, responseId, signal);
+          finalUsage = await retrieveUsageFromResponseId(
+            client,
+            responseId,
+            signal,
+          );
         } catch {
           finalUsage = null;
         }
@@ -407,7 +415,9 @@ export async function countInputTokens({
   reasoningEffort,
 }: CountInputTokensParams): Promise<number> {
   if (provider === "atlas") {
-    throw new Error("Atlas Cloud does not expose exact input token counting in this integration.");
+    throw new Error(
+      "Atlas Cloud does not expose exact input token counting in this integration.",
+    );
   }
 
   const client = createClient(provider, resolveApiKey(provider, apiKey));
@@ -504,7 +514,9 @@ export async function generateStructuredOutput<T>({
     };
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Structured output request failed.";
+      error instanceof Error
+        ? error.message
+        : "Structured output request failed.";
     if (provider === "openrouter") {
       throw new Error(
         `OpenRouter model does not support the required structured graph output: ${message}`,

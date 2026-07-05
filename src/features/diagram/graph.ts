@@ -25,38 +25,42 @@ export const diagramNodeShapeSchema = z.enum([
 export const diagramEdgeStyleSchema = z.enum(["solid", "dashed"]);
 
 export const diagramGroupSchema = z.object({
-  id: z.string().trim().regex(/^[a-z][a-z0-9_]*$/),
-  label: z.string().trim().min(1).max(MAX_GRAPH_LABEL_LENGTH),
-  description: z
+  id: z
     .string()
     .trim()
-    .max(MAX_GRAPH_DESCRIPTION_LENGTH)
-    .nullable(),
+    .regex(/^[a-z][a-z0-9_]*$/),
+  label: z.string().trim().min(1).max(MAX_GRAPH_LABEL_LENGTH),
+  description: z.string().trim().max(MAX_GRAPH_DESCRIPTION_LENGTH).nullable(),
 });
 
 export const diagramNodeSchema = z.object({
-  id: z.string().trim().regex(/^[a-z][a-z0-9_]*$/),
-  label: z.string().trim().min(1).max(MAX_GRAPH_LABEL_LENGTH),
-  type: z.string().trim().min(1).max(MAX_GRAPH_TYPE_LENGTH),
-  description: z
+  id: z
     .string()
     .trim()
-    .max(MAX_GRAPH_DESCRIPTION_LENGTH)
+    .regex(/^[a-z][a-z0-9_]*$/),
+  label: z.string().trim().min(1).max(MAX_GRAPH_LABEL_LENGTH),
+  type: z.string().trim().min(1).max(MAX_GRAPH_TYPE_LENGTH),
+  description: z.string().trim().max(MAX_GRAPH_DESCRIPTION_LENGTH).nullable(),
+  groupId: z
+    .string()
+    .trim()
+    .regex(/^[a-z][a-z0-9_]*$/)
     .nullable(),
-  groupId: z.string().trim().regex(/^[a-z][a-z0-9_]*$/).nullable(),
   path: z.string().trim().min(1).max(MAX_GRAPH_PATH_LENGTH).nullable(),
   shape: diagramNodeShapeSchema.nullable(),
 });
 
 export const diagramEdgeSchema = z.object({
-  from: z.string().trim().regex(/^[a-z][a-z0-9_]*$/),
-  to: z.string().trim().regex(/^[a-z][a-z0-9_]*$/),
-  label: z.string().trim().min(1).max(MAX_GRAPH_LABEL_LENGTH).nullable(),
-  description: z
+  from: z
     .string()
     .trim()
-    .max(MAX_GRAPH_DESCRIPTION_LENGTH)
-    .nullable(),
+    .regex(/^[a-z][a-z0-9_]*$/),
+  to: z
+    .string()
+    .trim()
+    .regex(/^[a-z][a-z0-9_]*$/),
+  label: z.string().trim().min(1).max(MAX_GRAPH_LABEL_LENGTH).nullable(),
+  description: z.string().trim().max(MAX_GRAPH_DESCRIPTION_LENGTH).nullable(),
   style: diagramEdgeStyleSchema.nullable(),
 });
 

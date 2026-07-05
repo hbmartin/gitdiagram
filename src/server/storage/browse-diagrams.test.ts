@@ -105,11 +105,9 @@ describe("browse diagram storage", () => {
       page: "2",
     });
 
-    expect(starsResult.items.map((item) => `${item.username}/${item.repo}`)).toEqual([
-      "vercel/next.js",
-      "vercel/swr",
-      "acme/demo",
-    ]);
+    expect(
+      starsResult.items.map((item) => `${item.username}/${item.repo}`),
+    ).toEqual(["vercel/next.js", "vercel/swr", "acme/demo"]);
     expect(
       filteredResult.items.map((item) => `${item.username}/${item.repo}`),
     ).toEqual(["vercel/next.js", "vercel/swr"]);

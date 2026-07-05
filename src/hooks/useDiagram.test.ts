@@ -56,9 +56,7 @@ vi.mock("~/hooks/diagram/useDiagramStream", () => ({
           | ((prev: DiagramStreamState) => DiagramStreamState),
       ) => {
         setStreamState(next);
-        setState((prev) =>
-          typeof next === "function" ? next(prev) : next,
-        );
+        setState((prev) => (typeof next === "function" ? next(prev) : next));
       },
       [setState],
     );
