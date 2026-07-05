@@ -260,7 +260,8 @@ export function useDiagram(
 
   const diagram = state.diagram ?? "";
   const error = state.error ?? "";
-  const { handleCopy, handleExportImage } = useDiagramExport(diagram);
+  const { handleCopy, handleExportImage, handleExportSvg } =
+    useDiagramExport(diagram);
 
   const handleApiKeySubmit = async (apiKey: string) => {
     setShowApiKeyDialog(false);
@@ -326,6 +327,7 @@ export function useDiagram(
     handleCloseApiKeyDialog,
     handleOpenApiKeyDialog,
     handleExportImage,
+    handleExportSvg,
     handleRegenerate,
     handleDiagramRenderError,
     state: state as DiagramStreamState,

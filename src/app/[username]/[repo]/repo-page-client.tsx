@@ -65,6 +65,7 @@ export default function RepoPageClient({
     handleCloseApiKeyDialog,
     handleOpenApiKeyDialog,
     handleExportImage,
+    handleExportSvg,
     handleRegenerate,
     handleDiagramRenderError,
     state,
@@ -139,6 +140,7 @@ export default function RepoPageClient({
               : undefined
           }
           onExportImage={handleExportImage}
+          onExportSvg={handleExportSvg}
           onRegenerate={handleRegenerate}
           zoomingEnabled={zoomingEnabled}
           onZoomToggle={() => setZoomingEnabled((prev) => !prev)}
