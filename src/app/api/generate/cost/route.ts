@@ -24,12 +24,14 @@ import {
   HARD_GENERATION_INPUT_TOKEN_LIMIT,
 } from "~/server/generate/limits";
 import { generateRequestSchema } from "~/server/generate/types";
+import { createTimer, logEvent } from "~/server/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
+  const timer = createTimer();
   try {
     const parsed = generateRequestSchema.safeParse(await request.json());
     if (!parsed.success) {
@@ -111,6 +113,12 @@ export async function POST(request: Request) {
       }
     }
 
+    logEvent("generate.cost.success", {
+      username,
+      repo,
+      elapsed_ms: timer.elapsedMs(),
+      model,
+    });
     return NextResponse.json({
       ok: true,
       sampled: sampleInfo ?? undefined,
@@ -126,6 +134,10 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    logEvent("generate.cost.failed", {
+      elapsed_ms: timer.elapsedMs(),
+      error: error instanceof Error ? error.message : String(error),
+    });
     return NextResponse.json({
       ok: false,
       error:

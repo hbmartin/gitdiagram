@@ -523,7 +523,49 @@ async def generate_stream(request: Request):
 
             asyncio.create_task(_run())
 
+        def log_terminal_event(payload: dict[str, Any]) -> None:
+            status = payload.get("status")
+            if status == "started":
+                log_event(
+                    "generation.started",
+                    username=parsed.username,
+                    repo=parsed.repo,
+                    ref=parsed.ref,
+                    subdir=parsed.subdir,
+                    session_id=payload.get("session_id"),
+                    sampled=payload.get("sampled"),
+                )
+            elif status == "complete":
+                cost_summary = payload.get("cost_summary") or {}
+                usage = cost_summary.get("usage") or {}
+                graph_attempts = payload.get("graph_attempts")
+                log_event(
+                    "generation.succeeded",
+                    username=parsed.username,
+                    repo=parsed.repo,
+                    ref=parsed.ref,
+                    subdir=parsed.subdir,
+                    session_id=payload.get("session_id"),
+                    duration_ms=timer.elapsed_ms(),
+                    cost_usd=cost_summary.get("amountUsd"),
+                    total_tokens=usage.get("totalTokens"),
+                    graph_attempts=len(graph_attempts) if isinstance(graph_attempts, list) else None,
+                )
+            elif status == "error":
+                log_event(
+                    "generation.failed",
+                    username=parsed.username,
+                    repo=parsed.repo,
+                    ref=parsed.ref,
+                    subdir=parsed.subdir,
+                    session_id=payload.get("session_id"),
+                    duration_ms=timer.elapsed_ms(),
+                    error_code=payload.get("error_code"),
+                    failure_stage=payload.get("failure_stage"),
+                )
+
         def send(payload: dict[str, Any]) -> str:
+            log_terminal_event(payload)
             return _sse_message(payload)
 
         try:

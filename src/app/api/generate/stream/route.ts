@@ -101,6 +101,7 @@ import {
   writeGenerationProgress,
   type GenerationProgressSnapshot,
 } from "~/server/generate/progress-store";
+import { createTimer, logEvent } from "~/server/observability";
 import { generateRequestSchema, sseMessage } from "~/server/generate/types";
 
 export const runtime = "nodejs";
@@ -358,9 +359,59 @@ export async function POST(request: Request) {
           });
       };
 
+      const generationTimer = createTimer();
+
+      const logTerminalEvent = (payload: Record<string, unknown>) => {
+        if (payload.status === "started") {
+          logEvent("generation.started", {
+            username,
+            repo,
+            ref: variant.ref,
+            subdir: variant.subdir,
+            session_id: payload.session_id,
+            sampled: payload.sampled ?? null,
+          });
+          return;
+        }
+        if (payload.status === "complete") {
+          const costSummary = payload.cost_summary as
+            | { amountUsd?: number; usage?: { totalTokens?: number } }
+            | undefined;
+          logEvent("generation.succeeded", {
+            username,
+            repo,
+            ref: variant.ref,
+            subdir: variant.subdir,
+            session_id: payload.session_id,
+            duration_ms: generationTimer.elapsedMs(),
+            cost_usd: costSummary?.amountUsd ?? null,
+            total_tokens: costSummary?.usage?.totalTokens ?? null,
+            graph_attempts: Array.isArray(payload.graph_attempts)
+              ? payload.graph_attempts.length
+              : null,
+            client_gone: clientGone,
+          });
+          return;
+        }
+        if (payload.status === "error") {
+          logEvent("generation.failed", {
+            username,
+            repo,
+            ref: variant.ref,
+            subdir: variant.subdir,
+            session_id: payload.session_id,
+            duration_ms: generationTimer.elapsedMs(),
+            error_code: payload.error_code,
+            failure_stage: payload.failure_stage,
+            client_gone: clientGone,
+          });
+        }
+      };
+
       const send = (payload: Record<string, unknown>) => {
         updateProgressSnapshot(payload);
         persistProgress(payload.status as string | undefined);
+        logTerminalEvent(payload);
         if (controllerClosed || clientGone) {
           return;
         }
