@@ -56,6 +56,8 @@ export interface DiagramStreamMessage {
   latest_session_audit?: GenerationSessionAudit;
   generated_at?: string;
   sampled?: DiagramSampleInfo;
+  /** Set on messages replayed from a progress snapshot after a reconnect. */
+  resumed?: boolean;
 }
 
 export interface DiagramCostResponse {

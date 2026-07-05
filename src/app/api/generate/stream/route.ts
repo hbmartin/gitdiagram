@@ -95,6 +95,12 @@ import {
   FREE_GENERATION_INPUT_TOKEN_LIMIT,
   HARD_GENERATION_INPUT_TOKEN_LIMIT,
 } from "~/server/generate/limits";
+import {
+  isTerminalProgressStatus,
+  readGenerationProgress,
+  writeGenerationProgress,
+  type GenerationProgressSnapshot,
+} from "~/server/generate/progress-store";
 import { generateRequestSchema, sseMessage } from "~/server/generate/types";
 
 export const runtime = "nodejs";
@@ -205,7 +211,17 @@ export async function POST(request: Request) {
   const generationAbortController = new AbortController();
   const postResponseTasks: Array<() => Promise<void>> = [];
 
+  // When the client disconnects, the generation keeps running (the work and
+  // cost are already committed) and its progress snapshots stay readable via
+  // the GET resume endpoint. after() keeps the function alive until then.
+  let resolveRunFinished: () => void = () => undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    resolveRunFinished = resolve;
+  });
+  let clientGone = false;
+
   after(async () => {
+    await runFinished;
     for (const task of postResponseTasks) {
       await task();
     }
@@ -215,25 +231,137 @@ export async function POST(request: Request) {
     start(controller) {
       let controllerClosed = false;
       let wasCancelled = false;
-      const abortGeneration = () => {
-        wasCancelled = true;
-        if (!generationAbortController.signal.aborted) {
-          generationAbortController.abort();
-        }
-      };
 
-      request.signal.addEventListener("abort", abortGeneration, { once: true });
+      request.signal.addEventListener(
+        "abort",
+        () => {
+          clientGone = true;
+        },
+        { once: true },
+      );
 
       const closeStream = () => {
         if (controllerClosed) {
           return;
         }
         controllerClosed = true;
-        controller.close();
+        if (!clientGone) {
+          controller.close();
+        }
+      };
+
+      const progressSnapshot: GenerationProgressSnapshot = {
+        sessionId: "",
+        seq: 0,
+        status: "idle",
+        updatedAt: "",
+      };
+      let progressEnabled = true;
+      let lastProgressWriteAt = 0;
+      let progressChain: Promise<void> = Promise.resolve();
+
+      const updateProgressSnapshot = (payload: Record<string, unknown>) => {
+        const message = payload as {
+          status?: string;
+          session_id?: string;
+          message?: string;
+          chunk?: string;
+          [key: string]: unknown;
+        };
+        if (message.session_id) {
+          progressSnapshot.sessionId = message.session_id;
+        }
+        if (message.status === "explanation_chunk") {
+          progressSnapshot.explanation =
+            (progressSnapshot.explanation ?? "") + (message.chunk ?? "");
+          progressSnapshot.status = "explanation_chunk";
+        } else if (message.status) {
+          progressSnapshot.status = message.status;
+        }
+        const assign = <K extends keyof GenerationProgressSnapshot>(
+          target: K,
+          value: GenerationProgressSnapshot[K] | undefined,
+        ) => {
+          if (value !== undefined) {
+            progressSnapshot[target] = value;
+          }
+        };
+        assign(
+          "message",
+          message.message as GenerationProgressSnapshot["message"],
+        );
+        assign(
+          "costSummary",
+          message.cost_summary as GenerationProgressSnapshot["costSummary"],
+        );
+        assign(
+          "quotaResetAt",
+          message.quota_reset_at as GenerationProgressSnapshot["quotaResetAt"],
+        );
+        assign("graph", message.graph as GenerationProgressSnapshot["graph"]);
+        assign(
+          "graphAttempts",
+          message.graph_attempts as GenerationProgressSnapshot["graphAttempts"],
+        );
+        assign(
+          "diagram",
+          message.diagram as GenerationProgressSnapshot["diagram"],
+        );
+        assign(
+          "sampled",
+          message.sampled as GenerationProgressSnapshot["sampled"],
+        );
+        assign("error", message.error as GenerationProgressSnapshot["error"]);
+        assign(
+          "errorCode",
+          message.error_code as GenerationProgressSnapshot["errorCode"],
+        );
+        assign(
+          "validationError",
+          message.validation_error as GenerationProgressSnapshot["validationError"],
+        );
+        assign(
+          "failureStage",
+          message.failure_stage as GenerationProgressSnapshot["failureStage"],
+        );
+        assign(
+          "latestSessionAudit",
+          message.latest_session_audit as GenerationProgressSnapshot["latestSessionAudit"],
+        );
+        assign(
+          "generatedAt",
+          message.generated_at as GenerationProgressSnapshot["generatedAt"],
+        );
+        if (message.status === "complete" && message.explanation) {
+          progressSnapshot.explanation = message.explanation as string;
+        }
+        progressSnapshot.seq += 1;
+        progressSnapshot.updatedAt = new Date().toISOString();
+      };
+
+      const persistProgress = (status: string | undefined) => {
+        if (!progressEnabled || !progressSnapshot.sessionId) {
+          return;
+        }
+        const now = Date.now();
+        const isChunk = status === "explanation_chunk";
+        if (isChunk && now - lastProgressWriteAt < 500) {
+          return;
+        }
+        lastProgressWriteAt = now;
+        const copy = { ...progressSnapshot };
+        progressChain = progressChain
+          .then(() => writeGenerationProgress(copy))
+          .catch(() => {
+            // Progress persistence is best-effort (e.g. Redis unconfigured).
+            progressEnabled = false;
+          });
       };
 
       const send = (payload: Record<string, unknown>) => {
-        if (controllerClosed || generationAbortController.signal.aborted) {
+        updateProgressSnapshot(payload);
+        persistProgress(payload.status as string | undefined);
+        if (controllerClosed || clientGone) {
           return;
         }
         controller.enqueue(encoder.encode(sseMessage(payload)));
@@ -946,16 +1074,148 @@ export async function POST(request: Request) {
               // Best effort quota finalization and audit persistence.
             }
           }
+          try {
+            await progressChain;
+          } catch {
+            // Progress writes are best-effort.
+          }
           closeStream();
+          resolveRunFinished();
         }
       };
 
       void run();
     },
     cancel() {
-      if (!generationAbortController.signal.aborted) {
-        generationAbortController.abort();
-      }
+      // The client went away; keep generating so the result is persisted and
+      // the session can be resumed via GET ?session_id=….
+      clientGone = true;
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+}
+
+const RESUME_POLL_INTERVAL_MS = 800;
+const RESUME_MAX_DURATION_MS = 290_000;
+
+function progressSnapshotToStreamMessage(
+  snapshot: GenerationProgressSnapshot,
+): Record<string, unknown> {
+  return {
+    // Chunk events are cumulative in the snapshot, so a resumer receives the
+    // full explanation under the plain "explanation" status.
+    status:
+      snapshot.status === "explanation_chunk" ? "explanation" : snapshot.status,
+    session_id: snapshot.sessionId,
+    message: snapshot.message,
+    cost_summary: snapshot.costSummary,
+    quota_reset_at: snapshot.quotaResetAt,
+    explanation: snapshot.explanation,
+    diagram: snapshot.diagram,
+    graph: snapshot.graph,
+    graph_attempts: snapshot.graphAttempts,
+    sampled: snapshot.sampled ?? undefined,
+    error: snapshot.error,
+    error_code: snapshot.errorCode,
+    validation_error: snapshot.validationError,
+    failure_stage: snapshot.failureStage,
+    latest_session_audit: snapshot.latestSessionAudit,
+    generated_at: snapshot.generatedAt,
+    resumed: true,
+  };
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const sessionId = url.searchParams.get("session_id")?.trim();
+
+  if (!sessionId) {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "session_id is required.",
+        error_code: "VALIDATION_ERROR",
+      }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      let closed = false;
+      const send = (payload: Record<string, unknown>) => {
+        if (closed) return;
+        controller.enqueue(encoder.encode(sseMessage(payload)));
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        controller.close();
+      };
+
+      const run = async () => {
+        const deadline = Date.now() + RESUME_MAX_DURATION_MS;
+        let lastSeq = -1;
+
+        while (Date.now() < deadline) {
+          if (request.signal.aborted) {
+            close();
+            return;
+          }
+
+          let snapshot: GenerationProgressSnapshot | null = null;
+          try {
+            snapshot = await readGenerationProgress(sessionId);
+          } catch {
+            snapshot = null;
+          }
+
+          if (!snapshot) {
+            send({
+              status: "error",
+              session_id: sessionId,
+              error:
+                "No resumable generation was found for this session. Please regenerate.",
+              error_code: "RESUME_NOT_FOUND",
+            });
+            close();
+            return;
+          }
+
+          if (snapshot.seq !== lastSeq) {
+            lastSeq = snapshot.seq;
+            send(progressSnapshotToStreamMessage(snapshot));
+          }
+
+          if (isTerminalProgressStatus(snapshot.status)) {
+            close();
+            return;
+          }
+
+          await sleep(RESUME_POLL_INTERVAL_MS);
+        }
+
+        send({
+          status: "error",
+          session_id: sessionId,
+          error: "Timed out waiting for the generation to finish.",
+          error_code: "RESUME_TIMEOUT",
+        });
+        close();
+      };
+
+      run().catch(() => close());
+    },
+    cancel() {
+      // Reader went away; polling loop exits on the aborted signal.
     },
   });
 
