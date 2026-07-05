@@ -7,7 +7,13 @@ import RepoPageClient from "./repo-page-client";
 
 type RepoPageProps = {
   params: Promise<{ username: string; repo: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
+
+function firstParam(value: string | string[] | undefined): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return first?.trim() || null;
+}
 
 export const revalidate = 300;
 export const dynamicParams = true;
@@ -62,17 +68,28 @@ export async function generateMetadata({
   };
 }
 
-export default async function Repo({ params }: RepoPageProps) {
+export default async function Repo({ params, searchParams }: RepoPageProps) {
   const { username, repo } = await params;
-  const initialState = (await getCachedPublicDiagramState(
-    username,
-    repo,
-  )) as DiagramStateResponse | null;
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const ref = firstParam(resolvedSearchParams.ref);
+  const subdir = firstParam(resolvedSearchParams.subdir);
+  const isDefaultVariant = !ref && !subdir;
+
+  // Variant pages (specific ref or subdirectory) always resolve their state
+  // client-side against the variant-specific storage keys.
+  const initialState = isDefaultVariant
+    ? ((await getCachedPublicDiagramState(
+        username,
+        repo,
+      )) as DiagramStateResponse | null)
+    : null;
 
   return (
     <RepoPageClient
       username={username}
       repo={repo}
+      diagramRef={ref}
+      subdir={subdir}
       initialState={initialState?.diagram ? initialState : null}
     />
   );

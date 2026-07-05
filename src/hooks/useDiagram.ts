@@ -43,11 +43,19 @@ function getFailureMessage(
   return audit.renderError ?? audit.compilerError ?? audit.validationError;
 }
 
+export interface DiagramVariant {
+  ref?: string | null;
+  subdir?: string | null;
+}
+
 export function useDiagram(
   username: string,
   repo: string,
   initialState?: DiagramStateResponse | null,
+  variant?: DiagramVariant,
 ) {
+  const ref = variant?.ref ?? null;
+  const subdir = variant?.subdir ?? null;
   const [loading, setLoading] = useState<boolean>(
     !Boolean(initialState?.diagram),
   );
@@ -90,6 +98,8 @@ export function useDiagram(
   const { state, runGeneration, setState } = useDiagramStream({
     username,
     repo,
+    ref,
+    subdir,
     onComplete: onStreamComplete,
     onError: onStreamError,
     initialState: toInitialStreamState(initialState),
@@ -172,6 +182,7 @@ export function useDiagram(
           username,
           repo,
           githubPat ?? undefined,
+          { ref, subdir },
         );
         const hasStoredDiagram = applyStoredState(stateRecord);
 
@@ -194,7 +205,7 @@ export function useDiagram(
         }
       }
     },
-    [applyStoredState, repo, runGeneration, setState, username],
+    [applyStoredState, ref, repo, runGeneration, setState, subdir, username],
   );
 
   const getDiagram = useCallback(async () => {
@@ -291,6 +302,7 @@ export function useDiagram(
         repo,
         renderMessage,
         githubPat ?? undefined,
+        { ref, subdir },
       );
       setState((prev) => ({
         ...prev,
@@ -300,7 +312,7 @@ export function useDiagram(
         validationError: renderMessage,
       }));
     },
-    [repo, setState, username],
+    [ref, repo, setState, subdir, username],
   );
 
   return {

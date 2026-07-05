@@ -65,6 +65,10 @@ import {
   SYSTEM_GRAPH_PROMPT,
 } from "~/server/generate/prompts";
 import {
+  isDefaultVariant,
+  normalizeRepoVariant,
+} from "~/server/storage/cache-key";
+import {
   getPublicDiagramStateCacheTag,
   getRepoPagePath,
 } from "~/server/storage/repo-page-cache";
@@ -188,7 +192,14 @@ export async function POST(request: Request) {
     repo,
     api_key: apiKey,
     github_pat: githubPat,
+    ref: requestedRef,
+    subdir: requestedSubdir,
   } = parsed.data;
+  const variant = normalizeRepoVariant({
+    ref: requestedRef,
+    subdir: requestedSubdir,
+  });
+  const isDefaultRepoVariant = isDefaultVariant(variant);
 
   const encoder = new TextEncoder();
   const generationAbortController = new AbortController();
@@ -249,6 +260,7 @@ export async function POST(request: Request) {
             githubPat,
             visibility: storageVisibility,
             audit: nextAudit,
+            variant,
           });
         };
 
@@ -318,12 +330,12 @@ export async function POST(request: Request) {
             }
           }
 
-          let githubData = await getGithubData(
-            username,
-            repo,
+          let githubData = await getGithubData(username, repo, {
             githubPat,
-            generationAbortController.signal,
-          );
+            ref: variant.ref,
+            subdir: variant.subdir,
+            signal: generationAbortController.signal,
+          });
           storageVisibility = githubData.isPrivate ? "private" : "public";
           const runEstimate = () =>
             estimateGenerationCost({
@@ -758,7 +770,7 @@ export async function POST(request: Request) {
             graph: validGraph,
             username,
             repo,
-            branch: githubData.defaultBranch,
+            branch: githubData.resolvedRef,
           });
           audit = withCompiledDiagram(audit, diagram);
           send({
@@ -827,9 +839,13 @@ export async function POST(request: Request) {
             diagram,
             audit,
             usedOwnKey: Boolean(apiKey),
+            variant,
+            ref: githubData.resolvedRef,
+            subdir: githubData.subdir,
+            commitSha: githubData.commitSha,
           });
 
-          if (storageVisibility === "public") {
+          if (storageVisibility === "public" && isDefaultRepoVariant) {
             const lastSuccessfulAt =
               audit.updatedAt ?? new Date().toISOString();
             postResponseTasks.push(async () => {

@@ -4,6 +4,7 @@ import {
   getPrivateLocation,
   getReadLocations,
   getPublicLocation,
+  type RepoVariant,
   type StorageLocation,
 } from "~/server/storage/cache-key";
 import { getJsonObject, putJsonObject } from "~/server/storage/r2";
@@ -51,6 +52,9 @@ function toDiagramStateResponse(
     graph: artifact.graph,
     latestSessionAudit: artifact.latestSessionSummary,
     lastSuccessfulAt: artifact.lastSuccessfulAt,
+    ref: artifact.ref ?? null,
+    subdir: artifact.subdir ?? null,
+    commitSha: artifact.commitSha ?? null,
   };
 }
 
@@ -64,6 +68,7 @@ export async function getStoredDiagramArtifact(params: {
   username: string;
   repo: string;
   githubPat?: string;
+  variant?: RepoVariant | null;
 }): Promise<{
   artifact: DiagramArtifact;
   location: StorageLocation;
@@ -82,6 +87,7 @@ export async function getStoredDiagramState(params: {
   username: string;
   repo: string;
   githubPat?: string;
+  variant?: RepoVariant | null;
 }): Promise<DiagramStateResponse | null> {
   const result = await getStoredDiagramArtifact(params);
   if (!result) {
@@ -124,11 +130,20 @@ export async function writeDiagramArtifact(params: {
   usedOwnKey: boolean;
   latestSessionSummary: GenerationSessionAudit;
   lastSuccessfulAt: string;
+  variant?: RepoVariant | null;
+  ref?: string | null;
+  subdir?: string | null;
+  commitSha?: string | null;
 }): Promise<void> {
   const location =
     params.visibility === "private"
-      ? getPrivateLocation(params.username, params.repo, params.githubPat ?? "")
-      : getPublicLocation(params.username, params.repo);
+      ? getPrivateLocation(
+          params.username,
+          params.repo,
+          params.githubPat ?? "",
+          params.variant,
+        )
+      : getPublicLocation(params.username, params.repo, params.variant);
 
   const artifact: DiagramArtifact = {
     version: 1,
@@ -143,6 +158,9 @@ export async function writeDiagramArtifact(params: {
     usedOwnKey: params.usedOwnKey,
     latestSessionSummary: params.latestSessionSummary,
     lastSuccessfulAt: params.lastSuccessfulAt,
+    ref: params.ref ?? null,
+    subdir: params.subdir ?? null,
+    commitSha: params.commitSha ?? null,
   };
 
   await putJsonObject(location.bucket, location.artifactKey, artifact);
@@ -154,11 +172,17 @@ export async function updateArtifactLatestSessionSummary(params: {
   githubPat?: string;
   visibility: ArtifactVisibility;
   latestSessionSummary: GenerationSessionAudit;
+  variant?: RepoVariant | null;
 }): Promise<boolean> {
   const location =
     params.visibility === "private"
-      ? getPrivateLocation(params.username, params.repo, params.githubPat ?? "")
-      : getPublicLocation(params.username, params.repo);
+      ? getPrivateLocation(
+          params.username,
+          params.repo,
+          params.githubPat ?? "",
+          params.variant,
+        )
+      : getPublicLocation(params.username, params.repo, params.variant);
 
   const artifact = await getArtifactForLocation(location);
   if (!artifact) {

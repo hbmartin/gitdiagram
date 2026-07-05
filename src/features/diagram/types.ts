@@ -79,6 +79,8 @@ export interface StreamGenerationParams {
   repo: string;
   apiKey?: string;
   githubPat?: string;
+  ref?: string | null;
+  subdir?: string | null;
 }
 
 export interface DiagramStateResponse {
@@ -87,4 +89,7 @@ export interface DiagramStateResponse {
   graph: DiagramGraph | null;
   latestSessionAudit: GenerationSessionAudit | null;
   lastSuccessfulAt: string | null;
+  ref?: string | null;
+  subdir?: string | null;
+  commitSha?: string | null;
 }

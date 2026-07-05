@@ -47,6 +47,7 @@ export async function getGenerationCost(
   repo: string,
   githubPat?: string,
   apiKey?: string,
+  variant?: { ref?: string | null; subdir?: string | null },
 ): Promise<DiagramCostResponse> {
   try {
     const response = await fetch(`${getGenerateBasePath()}/cost`, {
@@ -59,6 +60,8 @@ export async function getGenerationCost(
         repo,
         api_key: apiKey,
         github_pat: githubPat,
+        ref: variant?.ref ?? undefined,
+        subdir: variant?.subdir ?? undefined,
       }),
     });
 
@@ -106,6 +109,8 @@ export async function streamDiagramGeneration(
       repo: params.repo,
       api_key: params.apiKey,
       github_pat: params.githubPat,
+      ref: params.ref ?? undefined,
+      subdir: params.subdir ?? undefined,
     }),
   });
 

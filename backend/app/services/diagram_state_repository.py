@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import urllib.parse
 import os
 from typing import Any, Literal
 from urllib.parse import quote
@@ -61,6 +62,33 @@ def _repo_key(username: str, repo: str) -> str:
     return f"{username.strip().lower()}/{repo.strip().lower()}"
 
 
+def normalize_repo_variant(variant: dict[str, Any] | None) -> dict[str, str | None]:
+    ref = ((variant or {}).get("ref") or "").strip() or None
+    subdir = ((variant or {}).get("subdir") or "").strip().strip("/") or None
+    return {"ref": ref, "subdir": subdir}
+
+
+def is_default_variant(variant: dict[str, Any] | None) -> bool:
+    normalized = normalize_repo_variant(variant)
+    return normalized["ref"] is None and normalized["subdir"] is None
+
+
+def _variant_segments(variant: dict[str, Any] | None) -> tuple[str, str] | None:
+    normalized = normalize_repo_variant(variant)
+    if normalized["ref"] is None and normalized["subdir"] is None:
+        return None
+    # Refs and subdirs are case-sensitive, so they are encoded without lowercasing.
+    ref_segment = (
+        urllib.parse.quote(normalized["ref"], safe="") if normalized["ref"] else "@default"
+    )
+    subdir_segment = (
+        urllib.parse.quote(normalized["subdir"], safe="")
+        if normalized["subdir"]
+        else "@root"
+    )
+    return ref_segment, subdir_segment
+
+
 class _ArtifactLocator:
     def __init__(
         self,
@@ -102,9 +130,11 @@ class _ArtifactLocator:
         repo: str,
         visibility: ArtifactVisibility,
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> tuple[str, str, str]:
         normalized_username = _normalize_segment(username)
         normalized_repo = _normalize_segment(repo)
+        segments = _variant_segments(variant)
 
         if visibility == "private":
             if not github_pat:
@@ -112,6 +142,13 @@ class _ArtifactLocator:
             namespace = self._pat_namespace(github_pat)
             if not self.private_bucket:
                 raise ValueError("Missing R2_PRIVATE_BUCKET.")
+            if segments:
+                ref_segment, subdir_segment = segments
+                return (
+                    self.private_bucket,
+                    f"private/v1/{namespace}/{normalized_username}/{normalized_repo}/variants/{ref_segment}/{subdir_segment}.json",
+                    f"status:v1:private:{namespace}:{normalized_username}:{normalized_repo}:{ref_segment}:{subdir_segment}",
+                )
             return (
                 self.private_bucket,
                 f"private/v1/{namespace}/{normalized_username}/{normalized_repo}.json",
@@ -120,6 +157,13 @@ class _ArtifactLocator:
 
         if not self.public_bucket:
             raise ValueError("Missing R2_PUBLIC_BUCKET.")
+        if segments:
+            ref_segment, subdir_segment = segments
+            return (
+                self.public_bucket,
+                f"public/v1/{normalized_username}/{normalized_repo}/variants/{ref_segment}/{subdir_segment}.json",
+                f"status:v1:public:{normalized_username}:{normalized_repo}:{ref_segment}:{subdir_segment}",
+            )
         return (
             self.public_bucket,
             f"public/v1/{normalized_username}/{normalized_repo}.json",
@@ -298,12 +342,14 @@ class _R2ArtifactStore:
         visibility: ArtifactVisibility,
         latest_session_summary: dict[str, Any],
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> bool:
         bucket, artifact_key, _status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         artifact = self.get_json_object(bucket, artifact_key)
         if not artifact:
@@ -327,12 +373,17 @@ class _R2ArtifactStore:
         visibility: ArtifactVisibility,
         github_pat: str | None = None,
         slim_audit: dict[str, Any],
+        variant: dict[str, Any] | None = None,
+        ref: str | None = None,
+        subdir: str | None = None,
+        commit_sha: str | None = None,
     ) -> tuple[str, str, str]:
         bucket, artifact_key, status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         updated_at = str(audit.get("updatedAt") or audit.get("createdAt") or "")
         payload = {
@@ -348,6 +399,9 @@ class _R2ArtifactStore:
             "usedOwnKey": used_own_key,
             "latestSessionSummary": slim_audit,
             "lastSuccessfulAt": updated_at,
+            "ref": ref,
+            "subdir": subdir,
+            "commitSha": commit_sha,
         }
         self.put_json_object(bucket, artifact_key, payload)
         return bucket, artifact_key, status_key
@@ -415,12 +469,14 @@ class _FailureStatusStore:
         repo: str,
         visibility: ArtifactVisibility,
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> None:
         _bucket, _artifact_key, status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         self.redis.command(["DEL", status_key])
 
@@ -432,12 +488,14 @@ class _FailureStatusStore:
         visibility: ArtifactVisibility,
         latest_session_summary: dict[str, Any],
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> None:
         _bucket, _artifact_key, status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         payload = {
             "version": 1,
@@ -565,6 +623,7 @@ class DiagramStateRepository:
         audit: dict[str, Any],
         visibility: ArtifactVisibility | None = None,
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> None:
         if audit.get("status") not in {"failed", "succeeded"}:
             return
@@ -583,6 +642,7 @@ class DiagramStateRepository:
                 visibility=resolved_visibility,
                 github_pat=github_pat,
                 latest_session_summary=latest_session_summary,
+                variant=variant,
             )
 
         if audit.get("status") == "failed" and not artifact_updated and self.status_store_is_configured():
@@ -592,6 +652,7 @@ class DiagramStateRepository:
                 visibility=resolved_visibility,
                 github_pat=github_pat,
                 latest_session_summary=latest_session_summary,
+                variant=variant,
             )
             return
 
@@ -601,6 +662,7 @@ class DiagramStateRepository:
                 repo=repo,
                 visibility=resolved_visibility,
                 github_pat=github_pat,
+                variant=variant,
             )
 
     def save_successful_diagram_state(
@@ -616,6 +678,10 @@ class DiagramStateRepository:
         stargazer_count: int | None,
         visibility: ArtifactVisibility = "public",
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
+        ref: str | None = None,
+        subdir: str | None = None,
+        commit_sha: str | None = None,
     ) -> None:
         if not self.artifact_storage_is_configured():
             raise ValueError("Missing R2 configuration.")
@@ -633,6 +699,10 @@ class DiagramStateRepository:
             visibility=visibility,
             github_pat=github_pat,
             slim_audit=slim_audit,
+            variant=variant,
+            ref=ref,
+            subdir=subdir,
+            commit_sha=commit_sha,
         )
         if self.status_store_is_configured():
             self.status_store.clear(
@@ -640,6 +710,7 @@ class DiagramStateRepository:
                 repo=repo,
                 visibility=visibility,
                 github_pat=github_pat,
+                variant=variant,
             )
 
     def upsert_public_browse_index_entry(

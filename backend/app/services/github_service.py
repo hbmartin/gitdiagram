@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import urllib.parse
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from threading import Lock
@@ -47,10 +48,18 @@ EXCLUDED_PATTERNS = [
 @dataclass(frozen=True)
 class GithubData:
     default_branch: str
+    resolved_ref: str
+    commit_sha: str | None
+    subdir: str | None
     file_tree: str
     readme: str
     is_private: bool
     stargazer_count: int | None
+
+
+def normalize_subdir(subdir: str | None) -> str | None:
+    cleaned = (subdir or "").strip().strip("/")
+    return cleaned or None
 
 
 def _should_include_file(path: str) -> bool:
@@ -175,9 +184,29 @@ class GitHubService:
             stargazer_count = None
         return data.get("default_branch") or "main", bool(data.get("private")), stargazer_count
 
-    def get_github_file_paths_as_list(self, username: str, repo: str, branch: str) -> str:
+    def resolve_commit_sha(
+        self, username: str, repo: str, ref: str, *, is_explicit_ref: bool
+    ) -> str | None:
+        try:
+            data = _fetch_json(
+                f"https://api.github.com/repos/{username}/{repo}/commits/{urllib.parse.quote(ref, safe='')}",
+                self._get_headers(),
+                f'Branch, tag, or commit "{ref}" was not found in the repository.',
+            )
+        except ValueError:
+            if is_explicit_ref:
+                raise
+            # The default branch should always resolve; if it does not (e.g. an
+            # empty repository), the tree fetch below produces the real error.
+            return None
+        sha = data.get("sha")
+        return sha if isinstance(sha, str) and sha else None
+
+    def get_github_file_paths_as_list(
+        self, username: str, repo: str, branch: str, subdir: str | None = None
+    ) -> str:
         data = _fetch_json(
-            f"https://api.github.com/repos/{username}/{repo}/git/trees/{branch}?recursive=1",
+            f"https://api.github.com/repos/{username}/{repo}/git/trees/{urllib.parse.quote(branch, safe='')}?recursive=1",
             self._get_headers(),
             "Could not fetch repository file tree.",
         )
@@ -189,6 +218,13 @@ class GitHubService:
             for item in (data.get("tree") or [])
             if isinstance(item.get("path"), str) and _should_include_file(item["path"])
         ]
+        if subdir:
+            prefix = f"{subdir}/"
+            paths = [path for path in paths if path == subdir or path.startswith(prefix)]
+            if not paths:
+                raise ValueError(
+                    f'Subdirectory "{subdir}" was not found in the repository.'
+                )
         if not paths:
             raise ValueError(
                 "Could not fetch repository file tree. Repository might be empty or inaccessible."
@@ -199,12 +235,34 @@ class GitHubService:
 
         return file_tree
 
-    def get_github_readme(self, username: str, repo: str) -> str:
+    def get_github_readme(
+        self, username: str, repo: str, ref: str | None = None, subdir: str | None = None
+    ) -> str:
+        ref_query = f"?ref={urllib.parse.quote(ref, safe='')}" if ref else ""
+        if subdir:
+            subdir_path = "/".join(
+                urllib.parse.quote(part, safe="") for part in subdir.split("/")
+            )
+            try:
+                return self._read_readme_payload(
+                    _fetch_json(
+                        f"https://api.github.com/repos/{username}/{repo}/readme/{subdir_path}{ref_query}",
+                        self._get_headers(),
+                        "No README found for the specified repository.",
+                    )
+                )
+            except ValueError:
+                pass  # Fall back to the repository root README below.
+
         data = _fetch_json(
-            f"https://api.github.com/repos/{username}/{repo}/readme",
+            f"https://api.github.com/repos/{username}/{repo}/readme{ref_query}",
             self._get_headers(),
             "No README found for the specified repository.",
         )
+        return self._read_readme_payload(data)
+
+    @staticmethod
+    def _read_readme_payload(data: dict) -> str:
         size = data.get("size")
         if isinstance(size, int) and size > MAX_README_BYTES:
             raise ValueError(REPOSITORY_TOO_LARGE_ERROR)
@@ -226,12 +284,29 @@ class GitHubService:
 
         return readme
 
-    def get_github_data(self, username: str, repo: str) -> GithubData:
+    def get_github_data(
+        self,
+        username: str,
+        repo: str,
+        ref: str | None = None,
+        subdir: str | None = None,
+    ) -> GithubData:
+        requested_ref = (ref or "").strip() or None
+        normalized_subdir = normalize_subdir(subdir)
         default_branch, is_private, stargazer_count = self.get_repo_metadata(username, repo)
-        file_tree = self.get_github_file_paths_as_list(username, repo, default_branch)
-        readme = self.get_github_readme(username, repo)
+        resolved_ref = requested_ref or default_branch
+        commit_sha = self.resolve_commit_sha(
+            username, repo, resolved_ref, is_explicit_ref=requested_ref is not None
+        )
+        file_tree = self.get_github_file_paths_as_list(
+            username, repo, commit_sha or resolved_ref, normalized_subdir
+        )
+        readme = self.get_github_readme(username, repo, requested_ref, normalized_subdir)
         return GithubData(
             default_branch=default_branch,
+            resolved_ref=resolved_ref,
+            commit_sha=commit_sha,
+            subdir=normalized_subdir,
             file_tree=file_tree,
             readme=readme,
             is_private=is_private,

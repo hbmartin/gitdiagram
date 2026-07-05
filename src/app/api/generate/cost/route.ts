@@ -45,6 +45,8 @@ export async function POST(request: Request) {
       repo,
       api_key: apiKey,
       github_pat: githubPat,
+      ref,
+      subdir,
     } = parsed.data;
     const provider = getProvider();
     const model = getModel(provider);
@@ -67,7 +69,11 @@ export async function POST(request: Request) {
       }
     }
 
-    let githubData = await getGithubData(username, repo, githubPat);
+    let githubData = await getGithubData(username, repo, {
+      githubPat,
+      ref,
+      subdir,
+    });
     const runEstimate = () =>
       estimateGenerationCost({
         provider,

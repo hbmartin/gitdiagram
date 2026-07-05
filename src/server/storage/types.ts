@@ -15,6 +15,12 @@ export interface DiagramArtifact {
   usedOwnKey: boolean;
   latestSessionSummary: GenerationSessionAudit;
   lastSuccessfulAt: string;
+  /** Branch, tag, or commit the diagram was generated against (absent for older artifacts). */
+  ref?: string | null;
+  /** Subdirectory scope, or null for the whole repository. */
+  subdir?: string | null;
+  /** Commit SHA the generation snapshot was taken at. */
+  commitSha?: string | null;
 }
 
 export interface StoredFailureSummary {

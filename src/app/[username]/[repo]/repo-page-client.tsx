@@ -16,12 +16,16 @@ import { SampledIndicator } from "~/components/sampled-indicator";
 type RepoPageClientProps = {
   username: string;
   repo: string;
+  diagramRef?: string | null;
+  subdir?: string | null;
   initialState?: DiagramStateResponse | null;
 };
 
 export default function RepoPageClient({
   username,
   repo,
+  diagramRef = null,
+  subdir = null,
   initialState = null,
 }: RepoPageClientProps) {
   const [zoomingEnabled, setZoomingEnabled] = useState(false);
@@ -46,7 +50,12 @@ export default function RepoPageClient({
     handleRegenerate,
     handleDiagramRenderError,
     state,
-  } = useDiagram(normalizedUsername, normalizedRepo, initialState);
+  } = useDiagram(normalizedUsername, normalizedRepo, initialState, {
+    ref: diagramRef,
+    subdir,
+  });
+
+  const hasScope = Boolean(diagramRef || subdir);
 
   const hasDiagram = Boolean(diagram);
   const hasError = Boolean(error || state.error);
@@ -81,6 +90,21 @@ export default function RepoPageClient({
           loading={loading}
         />
       </div>
+      {hasScope && (
+        <div className="mt-4 flex max-w-3xl flex-wrap items-center gap-2 text-sm">
+          <span className="rounded-md border border-purple-300 bg-purple-50 px-2 py-1 font-medium text-purple-900 dark:border-purple-700 dark:bg-purple-950 dark:text-purple-200">
+            {diagramRef ? `ref: ${diagramRef}` : null}
+            {diagramRef && subdir ? " · " : null}
+            {subdir ? `path: ${subdir}/` : null}
+          </span>
+          <a
+            href={`/${normalizedUsername}/${normalizedRepo}`}
+            className="text-purple-700 underline hover:text-purple-900 dark:text-purple-300"
+          >
+            View full repository diagram
+          </a>
+        </div>
+      )}
       <div className="mt-8 flex w-full flex-col items-center gap-8">
         {loading ? (
           <Loading

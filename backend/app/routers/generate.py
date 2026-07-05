@@ -26,7 +26,11 @@ from app.services.complimentary_gate import (
     should_apply_complimentary_gate,
 )
 from app.services.cost_estimator import estimate_generation_cost
-from app.services.diagram_state_repository import DiagramStateRepository
+from app.services.diagram_state_repository import (
+    DiagramStateRepository,
+    is_default_variant,
+    normalize_repo_variant,
+)
 from app.services.github_service import GitHubService
 from app.services.graph_service import (
     MAX_GRAPH_ATTEMPTS,
@@ -69,6 +73,8 @@ class GenerateRequest(BaseModel):
     repo: str = Field(min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
     github_pat: str | None = Field(default=None, min_length=1)
+    ref: str | None = Field(default=None, min_length=1, max_length=256)
+    subdir: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class _ClientDisconnectedError(Exception):
@@ -164,11 +170,20 @@ def _parse_request_payload(payload: Any) -> tuple[GenerateRequest | None, str | 
         return None, "Invalid request payload."
 
 
-def _get_github_data(username: str, repo: str, github_pat: str | None):
+def _get_github_data(
+    username: str,
+    repo: str,
+    github_pat: str | None,
+    ref: str | None = None,
+    subdir: str | None = None,
+):
     github_service = GitHubService(pat=github_pat)
-    github_data = github_service.get_github_data(username, repo)
+    github_data = github_service.get_github_data(username, repo, ref=ref, subdir=subdir)
     return SimpleNamespace(
         default_branch=github_data.default_branch,
+        resolved_ref=github_data.resolved_ref,
+        commit_sha=github_data.commit_sha,
+        subdir=github_data.subdir,
         file_tree=github_data.file_tree,
         readme=github_data.readme,
         is_private=github_data.is_private,
@@ -324,6 +339,8 @@ async def get_generation_cost(request: Request):
             parsed.username,
             parsed.repo,
             parsed.github_pat,
+            parsed.ref,
+            parsed.subdir,
         )
 
         async def run_estimate():
@@ -417,6 +434,8 @@ async def generate_stream(request: Request):
         provider = get_provider()
         model = get_model(provider)
         audit = _create_session_audit(session_id=str(uuid4()), provider=provider, model=model)
+        variant = normalize_repo_variant({"ref": parsed.ref, "subdir": parsed.subdir})
+        is_default_repo_variant = is_default_variant(variant)
         quota_reservation = None
         actual_usages = []
         has_complete_measured_usage = True
@@ -434,6 +453,7 @@ async def generate_stream(request: Request):
                     audit=next_audit or audit,
                     visibility=storage_visibility,
                     github_pat=parsed.github_pat,
+                    variant=variant,
                 )
             except Exception as exc:
                 log_event(
@@ -451,6 +471,9 @@ async def generate_stream(request: Request):
             diagram: str,
             used_own_key: bool,
             stargazer_count: int | None,
+            ref: str | None = None,
+            subdir: str | None = None,
+            commit_sha: str | None = None,
         ) -> None:
             if not diagram_state_repository.artifact_storage_is_configured():
                 return
@@ -467,6 +490,10 @@ async def generate_stream(request: Request):
                     stargazer_count=stargazer_count,
                     visibility=storage_visibility,
                     github_pat=parsed.github_pat,
+                    variant=variant,
+                    ref=ref,
+                    subdir=subdir,
+                    commit_sha=commit_sha,
                 )
             except Exception as exc:
                 log_event(
@@ -557,6 +584,8 @@ async def generate_stream(request: Request):
                 parsed.username,
                 parsed.repo,
                 parsed.github_pat,
+                parsed.ref,
+                parsed.subdir,
             )
             await _ensure_client_connected(request)
             storage_visibility = "private" if getattr(github_data, "is_private", False) else "public"
@@ -953,7 +982,7 @@ async def generate_stream(request: Request):
                 valid_graph,
                 parsed.username,
                 parsed.repo,
-                github_data.default_branch,
+                github_data.resolved_ref,
             )
             audit["compiledDiagram"] = diagram
             audit["updatedAt"] = _now_iso()
@@ -1004,9 +1033,12 @@ async def generate_stream(request: Request):
                 diagram=diagram,
                 used_own_key=bool(parsed.api_key),
                 stargazer_count=getattr(github_data, "stargazer_count", None),
+                ref=github_data.resolved_ref,
+                subdir=github_data.subdir,
+                commit_sha=github_data.commit_sha,
             )
 
-            if storage_visibility == "public":
+            if storage_visibility == "public" and is_default_repo_variant:
                 schedule_public_browse_index_update(
                     username=parsed.username,
                     repo=parsed.repo,
