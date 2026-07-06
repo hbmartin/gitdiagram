@@ -11,6 +11,8 @@ def test_github_service_rejects_truncated_recursive_tree(monkeypatch):
     def fake_fetch_json(url, headers, not_found_message):
         if url.endswith("/repos/acme/demo"):
             return {"default_branch": "main", "private": False, "stargazers_count": 42}
+        if "/commits/" in url:
+            return {"sha": "abc1234def"}
         if "/git/trees/" in url:
             return {"truncated": True, "tree": [{"path": "src/main.py"}]}
         raise AssertionError("README should not be fetched for truncated trees")
@@ -29,6 +31,8 @@ def test_github_service_rejects_oversized_file_tree_before_readme(monkeypatch):
     def fake_fetch_json(url, headers, not_found_message):
         if url.endswith("/repos/acme/demo"):
             return {"default_branch": "main", "private": False, "stargazers_count": 42}
+        if "/commits/" in url:
+            return {"sha": "abc1234def"}
         if "/git/trees/" in url:
             return {
                 "truncated": False,
@@ -50,6 +54,8 @@ def test_github_service_rejects_oversized_readme_metadata(monkeypatch):
     def fake_fetch_json(url, headers, not_found_message):
         if url.endswith("/repos/acme/demo"):
             return {"default_branch": "main", "private": False, "stargazers_count": 42}
+        if "/commits/" in url:
+            return {"sha": "abc1234def"}
         if "/git/trees/" in url:
             return {"truncated": False, "tree": [{"path": "src/main.py"}]}
         if url.endswith("/readme"):

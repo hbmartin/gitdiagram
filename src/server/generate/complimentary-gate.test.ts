@@ -53,7 +53,9 @@ describe("complimentary gate", () => {
   it("matches the complimentary family by resolved pricing model", () => {
     process.env.OPENAI_COMPLIMENTARY_MODEL_FAMILY = "gpt-5.4-mini";
 
-    expect(modelMatchesComplimentaryFamily("gpt-5.4-mini-2026-03-17")).toBe(true);
+    expect(modelMatchesComplimentaryFamily("gpt-5.4-mini-2026-03-17")).toBe(
+      true,
+    );
     expect(modelMatchesComplimentaryFamily("gpt-5.4")).toBe(false);
   });
 

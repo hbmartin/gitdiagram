@@ -10,8 +10,14 @@ import {
   GRAPH_MAX_OUTPUT_TOKENS,
   estimateTextTokenCostUsd,
 } from "~/server/generate/pricing";
-import { SYSTEM_FIRST_PROMPT, SYSTEM_GRAPH_PROMPT } from "~/server/generate/prompts";
-import { type AIProvider, supportsExactInputTokenCount } from "~/server/generate/model-config";
+import {
+  SYSTEM_FIRST_PROMPT,
+  SYSTEM_GRAPH_PROMPT,
+} from "~/server/generate/prompts";
+import {
+  type AIProvider,
+  supportsExactInputTokenCount,
+} from "~/server/generate/model-config";
 
 interface CountPromptInputTokensParams {
   provider: AIProvider;
@@ -124,7 +130,9 @@ export async function estimateGenerationCost(params: {
     "Estimate assumes one graph-planning attempt and the configured output caps.",
   ];
   if (explanationCount.usedFallback || graphStaticCount.usedFallback) {
-    noteParts.push("Some input tokens were approximated with a conservative local fallback.");
+    noteParts.push(
+      "Some input tokens were approximated with a conservative local fallback.",
+    );
   }
 
   const costSummary = createEstimateCostSummary({

@@ -94,8 +94,11 @@ def test_generate_cost_success(monkeypatch):
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -123,8 +126,11 @@ def test_generate_cost_uses_exact_count_when_user_api_key_is_provided(monkeypatc
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -180,8 +186,11 @@ def test_generate_stream_retries_invalid_graph_once(monkeypatch):
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -310,8 +319,11 @@ def test_generate_stream_blocks_when_daily_free_quota_is_exhausted(monkeypatch):
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -359,8 +371,11 @@ def test_generate_stream_bypasses_quota_gate_for_user_api_keys(monkeypatch):
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -453,8 +468,11 @@ def test_generate_stream_requires_user_key_above_free_input_limit(monkeypatch):
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -494,8 +512,11 @@ def test_generate_stream_completes_without_storage_when_quota_gate_disabled(monk
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -577,8 +598,11 @@ def test_generate_stream_errors_when_quota_gate_enabled_without_upstash(monkeypa
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -619,8 +643,11 @@ def test_generate_stream_finalizes_quota_with_exact_usage(monkeypatch):
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -750,8 +777,11 @@ def test_generate_stream_finalizes_with_measured_usage_after_failure(monkeypatch
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),
@@ -829,8 +859,11 @@ def test_generate_stream_rewrites_default_key_quota_errors_without_burning_reser
     monkeypatch.setattr(
         generate,
         "_get_github_data",
-        lambda username, repo, github_pat=None: SimpleNamespace(
+        lambda username, repo, github_pat=None, ref=None, subdir=None: SimpleNamespace(
             default_branch="main",
+            resolved_ref="main",
+            commit_sha="abc1234def",
+            subdir=None,
             file_tree="src/main.py",
             readme="# readme",
         ),

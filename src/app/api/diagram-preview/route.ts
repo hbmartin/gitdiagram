@@ -25,7 +25,8 @@ export async function GET(request: NextRequest) {
     { diagram: preview.diagram, lastSuccessfulAt: preview.lastSuccessfulAt },
     {
       headers: {
-        "Cache-Control": "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
+        "Cache-Control":
+          "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
       },
     },
   );

@@ -144,7 +144,9 @@ export function withFailure(
   };
 }
 
-export function withSuccess(audit: GenerationSessionAudit): GenerationSessionAudit {
+export function withSuccess(
+  audit: GenerationSessionAudit,
+): GenerationSessionAudit {
   return {
     ...audit,
     status: "succeeded",

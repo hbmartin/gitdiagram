@@ -4,6 +4,7 @@ import {
   getPrivateLocation,
   getReadLocations,
   getPublicLocation,
+  type RepoVariant,
   type StorageLocation,
 } from "~/server/storage/cache-key";
 import { upstashCommand } from "~/server/storage/upstash";
@@ -29,7 +30,10 @@ function toDiagramStateResponse(
 async function getSummaryForLocation(
   location: StorageLocation,
 ): Promise<StoredFailureSummary | null> {
-  const result = await upstashCommand<string | null>(["GET", location.statusKey]);
+  const result = await upstashCommand<string | null>([
+    "GET",
+    location.statusKey,
+  ]);
   if (!result) {
     return null;
   }
@@ -41,6 +45,7 @@ export async function getStoredFailureState(params: {
   username: string;
   repo: string;
   githubPat?: string;
+  variant?: RepoVariant | null;
 }): Promise<DiagramStateResponse | null> {
   for (const location of getReadLocations(params)) {
     const summary = await getSummaryForLocation(location);
@@ -58,11 +63,17 @@ export async function writeFailureSummary(params: {
   githubPat?: string;
   visibility: ArtifactVisibility;
   latestSessionSummary: GenerationSessionAudit;
+  variant?: RepoVariant | null;
 }): Promise<void> {
   const location =
     params.visibility === "private"
-      ? getPrivateLocation(params.username, params.repo, params.githubPat ?? "")
-      : getPublicLocation(params.username, params.repo);
+      ? getPrivateLocation(
+          params.username,
+          params.repo,
+          params.githubPat ?? "",
+          params.variant,
+        )
+      : getPublicLocation(params.username, params.repo, params.variant);
 
   const summary: StoredFailureSummary = {
     version: 1,
@@ -86,11 +97,17 @@ export async function clearFailureSummary(params: {
   repo: string;
   githubPat?: string;
   visibility: ArtifactVisibility;
+  variant?: RepoVariant | null;
 }): Promise<void> {
   const location =
     params.visibility === "private"
-      ? getPrivateLocation(params.username, params.repo, params.githubPat ?? "")
-      : getPublicLocation(params.username, params.repo);
+      ? getPrivateLocation(
+          params.username,
+          params.repo,
+          params.githubPat ?? "",
+          params.variant,
+        )
+      : getPublicLocation(params.username, params.repo, params.variant);
 
   await upstashCommand(["DEL", location.statusKey]);
 }

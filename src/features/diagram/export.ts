@@ -1,3 +1,17 @@
+export function exportMermaidSvg(svgElement: SVGSVGElement): void {
+  const svgData = new XMLSerializer().serializeToString(svgElement);
+  const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  const anchor = document.createElement("a");
+  anchor.download = "diagram.svg";
+  anchor.href = url;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
 export function exportMermaidSvgAsPng(svgElement: SVGSVGElement): void {
   const canvas = document.createElement("canvas");
   const scale = 4;
@@ -33,6 +47,5 @@ export function exportMermaidSvgAsPng(svgElement: SVGSVGElement): void {
   };
 
   img.src =
-    "data:image/svg+xml;base64," +
-    btoa(unescape(encodeURIComponent(svgData)));
+    "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgData)));
 }

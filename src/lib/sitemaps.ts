@@ -7,5 +7,8 @@ export function getSitemapCount(repoRouteCount: number) {
 }
 
 export function getSitemapUrls(siteUrl: string, sitemapCount: number) {
-  return Array.from({ length: sitemapCount }, (_, id) => `${siteUrl}/sitemap/${id}.xml`);
+  return Array.from(
+    { length: sitemapCount },
+    (_, id) => `${siteUrl}/sitemap/${id}.xml`,
+  );
 }

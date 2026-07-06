@@ -56,9 +56,7 @@ vi.mock("~/hooks/diagram/useDiagramStream", () => ({
           | ((prev: DiagramStreamState) => DiagramStreamState),
       ) => {
         setStreamState(next);
-        setState((prev) =>
-          typeof next === "function" ? next(prev) : next,
-        );
+        setState((prev) => (typeof next === "function" ? next(prev) : next));
       },
       [setState],
     );
@@ -211,7 +209,10 @@ describe("useDiagram", () => {
 
     await waitFor(() => expect(result.current.diagram).toContain("A-->C"));
 
-    expect(getDiagramState).toHaveBeenCalledWith("acme", "demo", undefined);
+    expect(getDiagramState).toHaveBeenCalledWith("acme", "demo", undefined, {
+      ref: null,
+      subdir: null,
+    });
     expect(runGeneration).not.toHaveBeenCalled();
     expect(result.current.lastGenerated?.toISOString()).toBe(
       "2026-03-29T12:00:00.000Z",
@@ -256,6 +257,7 @@ describe("useDiagram", () => {
         "demo",
         "Parse error on line 3",
         undefined,
+        { ref: null, subdir: null },
       ),
     );
     await waitFor(() =>

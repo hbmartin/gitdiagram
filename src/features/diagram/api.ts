@@ -47,6 +47,7 @@ export async function getGenerationCost(
   repo: string,
   githubPat?: string,
   apiKey?: string,
+  variant?: { ref?: string | null; subdir?: string | null },
 ): Promise<DiagramCostResponse> {
   try {
     const response = await fetch(`${getGenerateBasePath()}/cost`, {
@@ -59,6 +60,8 @@ export async function getGenerationCost(
         repo,
         api_key: apiKey,
         github_pat: githubPat,
+        ref: variant?.ref ?? undefined,
+        subdir: variant?.subdir ?? undefined,
       }),
     });
 
@@ -92,35 +95,10 @@ export async function getGenerationCost(
   }
 }
 
-export async function streamDiagramGeneration(
-  params: StreamGenerationParams,
+async function consumeSseResponse(
+  response: Response,
   handlers: StreamHandlers,
 ): Promise<void> {
-  const response = await fetch(`${getGenerateBasePath()}/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      username: params.username,
-      repo: params.repo,
-      api_key: params.apiKey,
-      github_pat: params.githubPat,
-    }),
-  });
-
-  if (!response.ok) {
-    try {
-      const data = (await response.json()) as DiagramStreamMessage;
-      throw new Error(data.error ?? "Failed to start streaming");
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error("Failed to start streaming");
-    }
-  }
-
   const reader = response.body?.getReader();
   if (!reader) {
     throw new Error("No reader available");
@@ -152,4 +130,65 @@ export async function streamDiagramGeneration(
   } finally {
     reader.releaseLock();
   }
+}
+
+export async function streamDiagramGeneration(
+  params: StreamGenerationParams,
+  handlers: StreamHandlers,
+): Promise<void> {
+  const response = await fetch(`${getGenerateBasePath()}/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      username: params.username,
+      repo: params.repo,
+      api_key: params.apiKey,
+      github_pat: params.githubPat,
+      ref: params.ref ?? undefined,
+      subdir: params.subdir ?? undefined,
+    }),
+  });
+
+  if (!response.ok) {
+    try {
+      const data = (await response.json()) as DiagramStreamMessage;
+      throw new Error(data.error ?? "Failed to start streaming");
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error("Failed to start streaming");
+    }
+  }
+
+  await consumeSseResponse(response, handlers);
+}
+
+/**
+ * Whether the configured generation backend can resume a dropped SSE stream.
+ * Only the in-repo Next backend persists progress snapshots today.
+ */
+export function generationSupportsResume(): boolean {
+  try {
+    return getGenerationBackendMode() === "next";
+  } catch {
+    return false;
+  }
+}
+
+export async function resumeDiagramGeneration(
+  sessionId: string,
+  handlers: StreamHandlers,
+): Promise<void> {
+  const response = await fetch(
+    `${getGenerateBasePath()}/stream?session_id=${encodeURIComponent(sessionId)}`,
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to resume streaming");
+  }
+
+  await consumeSseResponse(response, handlers);
 }

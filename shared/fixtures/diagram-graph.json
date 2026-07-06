@@ -1,0 +1,91 @@
+{
+  "groups": [
+    {
+      "id": "frontend",
+      "label": "Frontend",
+      "description": "Next.js app"
+    },
+    {
+      "id": "backend",
+      "label": "Backend",
+      "description": null
+    }
+  ],
+  "nodes": [
+    {
+      "id": "web_app",
+      "label": "Web App",
+      "type": "Next.js UI",
+      "description": "User-facing app",
+      "groupId": "frontend",
+      "path": "src/app",
+      "shape": null
+    },
+    {
+      "id": "diagram_view",
+      "label": "Diagram Viewer",
+      "type": "component",
+      "description": null,
+      "groupId": "frontend",
+      "path": "src/components/mermaid-diagram.tsx",
+      "shape": "box"
+    },
+    {
+      "id": "api",
+      "label": "Generation API",
+      "type": "FastAPI service",
+      "description": null,
+      "groupId": "backend",
+      "path": "backend/app/routers/generate.py",
+      "shape": "hexagon"
+    },
+    {
+      "id": "storage",
+      "label": "Artifact Store",
+      "type": "object storage",
+      "description": null,
+      "groupId": "backend",
+      "path": null,
+      "shape": "database"
+    },
+    {
+      "id": "github",
+      "label": "GitHub API",
+      "type": "external service",
+      "description": null,
+      "groupId": null,
+      "path": null,
+      "shape": "circle"
+    }
+  ],
+  "edges": [
+    {
+      "from": "web_app",
+      "to": "api",
+      "label": "SSE generate",
+      "description": null,
+      "style": "solid"
+    },
+    {
+      "from": "api",
+      "to": "storage",
+      "label": "persist artifact",
+      "description": null,
+      "style": "dashed"
+    },
+    {
+      "from": "api",
+      "to": "github",
+      "label": null,
+      "description": null,
+      "style": null
+    },
+    {
+      "from": "web_app",
+      "to": "diagram_view",
+      "label": "renders",
+      "description": null,
+      "style": "solid"
+    }
+  ]
+}

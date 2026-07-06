@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { unstable_cache } from "next/cache";
 import type { DiagramStateResponse } from "~/features/diagram/types";
 import { getStoredDiagramState } from "~/server/storage/artifact-store";
 import { getPublicDiagramStateCacheTag } from "~/server/storage/repo-page-cache";
+import { getRepoStaleness } from "~/server/repo-staleness";
 import RepoPageClient from "./repo-page-client";
 
 type RepoPageProps = {
@@ -64,16 +66,33 @@ export async function generateMetadata({
 
 export default async function Repo({ params }: RepoPageProps) {
   const { username, repo } = await params;
+
+  // This page stays static/ISR, so it only prepares the default-variant
+  // state. Variant URLs (?ref=…&subdir=…) are detected client-side and the
+  // client ignores this initial state for them.
   const initialState = (await getCachedPublicDiagramState(
     username,
     repo,
   )) as DiagramStateResponse | null;
 
+  const staleness =
+    initialState?.diagram && initialState.commitSha
+      ? await getRepoStaleness({
+          username,
+          repo,
+          commitSha: initialState.commitSha,
+          ref: initialState.ref,
+        })
+      : null;
+
   return (
-    <RepoPageClient
-      username={username}
-      repo={repo}
-      initialState={initialState?.diagram ? initialState : null}
-    />
+    <Suspense fallback={null}>
+      <RepoPageClient
+        username={username}
+        repo={repo}
+        initialState={initialState?.diagram ? initialState : null}
+        staleness={staleness}
+      />
+    </Suspense>
   );
 }

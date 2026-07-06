@@ -1,6 +1,7 @@
 import type { GenerationCostSummary } from "~/features/diagram/cost";
 import type {
   DiagramGraph,
+  DiagramSampleInfo,
   GenerationSessionAudit,
   GraphAttemptAudit,
 } from "~/features/diagram/graph";
@@ -34,6 +35,7 @@ export interface DiagramStreamState {
   validationError?: string;
   failureStage?: string;
   latestSessionAudit?: GenerationSessionAudit;
+  sampled?: DiagramSampleInfo;
 }
 
 export interface DiagramStreamMessage {
@@ -53,6 +55,9 @@ export interface DiagramStreamMessage {
   failure_stage?: string;
   latest_session_audit?: GenerationSessionAudit;
   generated_at?: string;
+  sampled?: DiagramSampleInfo;
+  /** Set on messages replayed from a progress snapshot after a reconnect. */
+  resumed?: boolean;
 }
 
 export interface DiagramCostResponse {
@@ -76,6 +81,8 @@ export interface StreamGenerationParams {
   repo: string;
   apiKey?: string;
   githubPat?: string;
+  ref?: string | null;
+  subdir?: string | null;
 }
 
 export interface DiagramStateResponse {
@@ -84,4 +91,7 @@ export interface DiagramStateResponse {
   graph: DiagramGraph | null;
   latestSessionAudit: GenerationSessionAudit | null;
   lastSuccessfulAt: string | null;
+  ref?: string | null;
+  subdir?: string | null;
+  commitSha?: string | null;
 }

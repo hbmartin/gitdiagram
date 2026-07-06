@@ -10,9 +10,10 @@ export async function getDiagramState(
   username: string,
   repo: string,
   githubPat?: string,
+  variant?: { ref?: string | null; subdir?: string | null },
 ): Promise<DiagramStateResponse> {
   try {
-    return await getDiagramStateRecord(username, repo, githubPat);
+    return await getDiagramStateRecord(username, repo, githubPat, variant);
   } catch (error) {
     console.error("Error fetching diagram state:", error);
     return {
@@ -30,6 +31,7 @@ export async function persistDiagramRenderError(
   repo: string,
   renderError: string,
   githubPat?: string,
+  variant?: { ref?: string | null; subdir?: string | null },
 ) {
   try {
     await recordLatestSessionRenderError({
@@ -37,6 +39,7 @@ export async function persistDiagramRenderError(
       repo,
       githubPat,
       renderError,
+      variant,
     });
   } catch (error) {
     console.error("Error recording diagram render error:", error);

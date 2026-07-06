@@ -19,8 +19,14 @@ You can also replace `hub` with `diagram` in any Github URL to access its diagra
 
 - 👀 **Instant Visualization**: Convert any GitHub repository structure into a system design / architecture diagram
 - 🎨 **Interactivity**: Click on components to navigate directly to source files and relevant directories
+- 🔎 **Drill-down**: Click a directory node to generate a scoped diagram of just that subtree
+- 🌿 **Branch & path scoping**: Paste a GitHub `/tree/<branch>/<path>` URL (or use `?ref=` / `?subdir=`) to diagram a specific branch, tag, commit, or subdirectory
+- 🕓 **Version history & staleness**: Every generation is kept as a version you can reopen, and the page tells you how many commits the repo has moved since the diagram was generated
+- ✍️ **Edit in place**: Tweak the generated Mermaid source with live validation before exporting
+- 🔌 **Resilient streaming**: If your connection drops mid-generation, the server keeps going and the client reattaches to the live progress
 - ⚡ **Fast Generation**: Powered by GPT-5-family models, with OpenAI for user-supplied browser keys and optional self-hosted providers such as OpenRouter or [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=gitdiagram)
-- 🖼️ **Export Options**: Copy Mermaid code or download the generated diagram as PNG
+- 🧩 **Large-repo sampling**: Repositories over the token budget are tiered-truncated (deepest paths first) instead of rejected, with a visible "partial view" indicator
+- 🖼️ **Export & embed**: Copy Mermaid code, download PNG/SVG, copy a README badge, or embed the diagram anywhere via `/embed/<owner>/<repo>`
 
 ## ⚙️ Tech Stack
 
@@ -73,7 +79,15 @@ When you submit a GitHub repo URL, GitDiagram asks the GitHub API for the repo's
 
 That graph is validated against the actual file tree, retried with feedback if it contains bad paths or invalid connections, then compiled into Mermaid and validated again before it is shown. Any node tied to a real path becomes clickable back to GitHub, and the final explanation, graph, diagram, and terminal generation state are stored in Cloudflare R2 and Upstash Redis so the app can reopen an existing result or show where a run failed.
 
-One implementation detail worth knowing: the Next backend validates Mermaid in-process in [`src/server/generate/mermaid-validator.ts`](/Users/ahmedkhaleel/repos/gitdiagram/src/server/generate/mermaid-validator.ts), while the FastAPI backend invokes the thin Bun wrapper in [`backend/scripts/validate_mermaid.mjs`](/Users/ahmedkhaleel/repos/gitdiagram/backend/scripts/validate_mermaid.mjs) backed by [`backend/lib/mermaid-validator.ts`](/Users/ahmedkhaleel/repos/gitdiagram/backend/lib/mermaid-validator.ts). Both use the same Mermaid + DOMPurify bootstrap approach, so the Railway backend runtime remains intentionally mixed Python + Bun.
+One implementation detail worth knowing: the Next backend validates Mermaid in-process in [`src/server/generate/mermaid-validator.ts`](./src/server/generate/mermaid-validator.ts), while the FastAPI backend invokes the thin Bun wrapper in [`backend/scripts/validate_mermaid.mjs`](./backend/scripts/validate_mermaid.mjs) backed by [`backend/lib/mermaid-validator.ts`](./backend/lib/mermaid-validator.ts). Both use the same Mermaid + DOMPurify bootstrap approach, so the Railway backend runtime remains intentionally mixed Python + Bun.
+
+Because the pipeline exists twice (TypeScript and Python), the two implementations are held together by an executable contract: `scripts/parity/dump-contract.ts` and `backend/scripts/dump_contract.py` emit the same JSON (prompts, pricing, limits, truncation behavior, and the Mermaid compiled from shared fixtures in `shared/fixtures/`), and `backend/tests/test_contract_parity.py` diffs them in CI. If you change one side, the parity tests tell you what to mirror on the other.
+
+## 🧪 Testing
+
+- `bun run test` — frontend/unit tests (Vitest), `bun run test:coverage` for coverage
+- `bun run test:backend` — FastAPI tests (pytest), including the cross-backend parity suite
+- `bun run test:e2e` — Playwright smoke tests that run the real app against fully mocked AI/GitHub/storage services (no keys or network needed)
 
 ## 🔒 How to diagram private repositories
 

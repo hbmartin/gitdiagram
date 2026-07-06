@@ -26,6 +26,7 @@ function toInitialStreamState(
     explanation: stateRecord.explanation ?? undefined,
     graph: stateRecord.graph ?? undefined,
     latestSessionAudit: stateRecord.latestSessionAudit ?? undefined,
+    sampled: stateRecord.latestSessionAudit?.sampled ?? undefined,
     costSummary:
       stateRecord.latestSessionAudit?.finalCost ??
       stateRecord.latestSessionAudit?.estimatedCost,
@@ -42,12 +43,22 @@ function getFailureMessage(
   return audit.renderError ?? audit.compilerError ?? audit.validationError;
 }
 
+export interface DiagramVariant {
+  ref?: string | null;
+  subdir?: string | null;
+}
+
 export function useDiagram(
   username: string,
   repo: string,
   initialState?: DiagramStateResponse | null,
+  variant?: DiagramVariant,
 ) {
-  const [loading, setLoading] = useState<boolean>(!Boolean(initialState?.diagram));
+  const ref = variant?.ref ?? null;
+  const subdir = variant?.subdir ?? null;
+  const [loading, setLoading] = useState<boolean>(
+    !Boolean(initialState?.diagram),
+  );
   const [lastGenerated, setLastGenerated] = useState<Date | undefined>(
     initialState?.lastSuccessfulAt
       ? new Date(initialState.lastSuccessfulAt)
@@ -56,11 +67,7 @@ export function useDiagram(
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
 
   const applyCompletedDiagram = useCallback(
-    async ({
-      generatedAt,
-    }: {
-      generatedAt?: string;
-    }) => {
+    async ({ generatedAt }: { generatedAt?: string }) => {
       if (generatedAt) {
         setLastGenerated(new Date(generatedAt));
       }
@@ -91,6 +98,8 @@ export function useDiagram(
   const { state, runGeneration, setState } = useDiagramStream({
     username,
     repo,
+    ref,
+    subdir,
     onComplete: onStreamComplete,
     onError: onStreamError,
     initialState: toInitialStreamState(initialState),
@@ -122,9 +131,12 @@ export function useDiagram(
         explanation: stateRecord.explanation ?? prev.explanation,
         latestSessionAudit: latestAudit ?? prev.latestSessionAudit,
         costSummary:
-          latestAudit?.finalCost ?? latestAudit?.estimatedCost ?? prev.costSummary,
+          latestAudit?.finalCost ??
+          latestAudit?.estimatedCost ??
+          prev.costSummary,
         graph: stateRecord.graph ?? latestAudit?.graph ?? prev.graph,
         graphAttempts: latestAudit?.graphAttempts ?? prev.graphAttempts,
+        sampled: latestAudit?.sampled ?? prev.sampled,
         failureStage: shouldExposeFailure
           ? latestAudit?.failureStage
           : prev.failureStage,
@@ -170,6 +182,7 @@ export function useDiagram(
           username,
           repo,
           githubPat ?? undefined,
+          { ref, subdir },
         );
         const hasStoredDiagram = applyStoredState(stateRecord);
 
@@ -192,7 +205,7 @@ export function useDiagram(
         }
       }
     },
-    [applyStoredState, repo, runGeneration, setState, username],
+    [applyStoredState, ref, repo, runGeneration, setState, subdir, username],
   );
 
   const getDiagram = useCallback(async () => {
@@ -247,7 +260,8 @@ export function useDiagram(
 
   const diagram = state.diagram ?? "";
   const error = state.error ?? "";
-  const { handleCopy, handleExportImage } = useDiagramExport(diagram);
+  const { handleCopy, handleExportImage, handleExportSvg } =
+    useDiagramExport(diagram);
 
   const handleApiKeySubmit = async (apiKey: string) => {
     setShowApiKeyDialog(false);
@@ -289,6 +303,7 @@ export function useDiagram(
         repo,
         renderMessage,
         githubPat ?? undefined,
+        { ref, subdir },
       );
       setState((prev) => ({
         ...prev,
@@ -298,7 +313,7 @@ export function useDiagram(
         validationError: renderMessage,
       }));
     },
-    [repo, setState, username],
+    [ref, repo, setState, subdir, username],
   );
 
   return {
@@ -312,6 +327,7 @@ export function useDiagram(
     handleCloseApiKeyDialog,
     handleOpenApiKeyDialog,
     handleExportImage,
+    handleExportSvg,
     handleRegenerate,
     handleDiagramRenderError,
     state: state as DiagramStreamState,

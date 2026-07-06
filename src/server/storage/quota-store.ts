@@ -32,7 +32,10 @@ redis.call("EXPIRE", key, ttl)
 return next_used_tokens
 `;
 
-export function buildQuotaKey(quotaDateUtc: string, quotaBucket: string): string {
+export function buildQuotaKey(
+  quotaDateUtc: string,
+  quotaBucket: string,
+): string {
   const rawPricingModel = quotaBucket.split(":")[1] ?? quotaBucket;
   const pricingModel = resolvePricingModel(rawPricingModel);
   return `quota:v1:${quotaDateUtc}:${pricingModel}`;

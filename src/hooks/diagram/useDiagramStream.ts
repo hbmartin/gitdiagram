@@ -1,6 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-import { streamDiagramGeneration } from "~/features/diagram/api";
+import {
+  generationSupportsResume,
+  resumeDiagramGeneration,
+  streamDiagramGeneration,
+} from "~/features/diagram/api";
 import type {
   DiagramStreamMessage,
   DiagramStreamState,
@@ -10,6 +14,8 @@ import { getStoredOpenAiKey } from "~/lib/openai-key";
 interface UseDiagramStreamOptions {
   username: string;
   repo: string;
+  ref?: string | null;
+  subdir?: string | null;
   initialState?: DiagramStreamState;
   onComplete: (result: {
     diagram: string;
@@ -24,6 +30,8 @@ interface UseDiagramStreamOptions {
 export function useDiagramStream({
   username,
   repo,
+  ref,
+  subdir,
   initialState,
   onComplete,
   onError,
@@ -76,6 +84,9 @@ export function useDiagramStream({
             diagram: data.diagram ?? prev.diagram,
             validationError: data.validation_error ?? prev.validationError,
             failureStage: data.failure_stage ?? prev.failureStage,
+            sampled: data.sampled ?? prev.sampled,
+            // Resume snapshots carry the full explanation accumulated so far.
+            explanation: data.explanation ?? prev.explanation,
           }));
           break;
         case "explanation_chunk":
@@ -104,6 +115,8 @@ export function useDiagramStream({
             graph: data.graph,
             graphAttempts: data.graph_attempts,
             latestSessionAudit: data.latest_session_audit,
+            sampled:
+              data.sampled ?? data.latest_session_audit?.sampled ?? undefined,
           });
           await onComplete({
             explanation,
@@ -134,6 +147,9 @@ export function useDiagramStream({
     [onComplete, onError],
   );
 
+  const sessionIdRef = useRef<string | undefined>(undefined);
+  const terminalReachedRef = useRef(false);
+
   const runGeneration = useCallback(
     async (githubPat?: string) => {
       setState({
@@ -144,20 +160,76 @@ export function useDiagramStream({
       const buffers = {
         explanation: "",
       };
+      sessionIdRef.current = undefined;
+      terminalReachedRef.current = false;
 
-      await streamDiagramGeneration(
-        {
-          username,
-          repo,
-          apiKey: getStoredOpenAiKey(),
-          githubPat,
-        },
-        {
-          onMessage: (message) => handleStreamMessage(message, buffers),
-        },
-      );
+      const onMessage = async (message: DiagramStreamMessage) => {
+        if (message.session_id) {
+          sessionIdRef.current = message.session_id;
+        }
+        if (
+          message.status === "complete" ||
+          message.status === "error" ||
+          message.error
+        ) {
+          terminalReachedRef.current = true;
+        }
+        return handleStreamMessage(message, buffers);
+      };
+
+      let streamError: unknown = null;
+      try {
+        await streamDiagramGeneration(
+          {
+            username,
+            repo,
+            apiKey: getStoredOpenAiKey(),
+            githubPat,
+            ref,
+            subdir,
+          },
+          { onMessage },
+        );
+      } catch (error) {
+        streamError = error;
+      }
+
+      // The connection dropped (or ended) before a terminal event. When the
+      // backend persists progress snapshots, reattach instead of failing —
+      // the server keeps generating after a disconnect.
+      const canResume =
+        !terminalReachedRef.current &&
+        Boolean(sessionIdRef.current) &&
+        generationSupportsResume();
+
+      if (canResume) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (terminalReachedRef.current) break;
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          try {
+            await resumeDiagramGeneration(sessionIdRef.current!, {
+              onMessage,
+            });
+          } catch {
+            // Retry until attempts are exhausted.
+          }
+        }
+      }
+
+      if (!terminalReachedRef.current) {
+        if (streamError) {
+          throw streamError;
+        }
+        setState((prev) => ({
+          ...prev,
+          status: "error",
+          error:
+            "The connection to the generation stream was lost. Please try again.",
+        }));
+        onError("The connection to the generation stream was lost.");
+      }
     },
-    [handleStreamMessage, repo, username],
+    [handleStreamMessage, onError, ref, repo, subdir, username],
   );
 
   return {

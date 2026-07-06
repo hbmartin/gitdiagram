@@ -5,6 +5,8 @@ export const generateRequestSchema = z.object({
   repo: z.string().min(1),
   api_key: z.string().min(1).optional(),
   github_pat: z.string().min(1).optional(),
+  ref: z.string().trim().min(1).max(256).optional(),
+  subdir: z.string().trim().min(1).max(512).optional(),
 });
 
 export type GenerateRequest = z.infer<typeof generateRequestSchema>;

@@ -13,6 +13,11 @@ vi.mock("~/hooks/useStarReminder", () => ({
   useStarReminder: vi.fn(),
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 vi.mock("~/components/main-card", () => ({
   default: () => <div data-testid="main-card" />,
 }));

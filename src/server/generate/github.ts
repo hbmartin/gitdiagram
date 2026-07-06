@@ -1,5 +1,13 @@
 import { getGitHubApiHeaders } from "../github-auth";
 
+// GITHUB_API_BASE_URL supports GitHub Enterprise hosts and test mocks.
+function githubApiBase(): string {
+  return (
+    process.env.GITHUB_API_BASE_URL?.trim().replace(/\/$/, "") ||
+    "https://api.github.com"
+  );
+}
+
 interface GitHubRepoResponse {
   default_branch?: string;
   private?: boolean;
@@ -21,10 +29,27 @@ interface GitHubReadmeResponse {
 
 export interface GithubData {
   defaultBranch: string;
+  /** The branch, tag, or commit the diagram was generated against. */
+  resolvedRef: string;
+  /** Commit SHA the resolved ref pointed at, when resolvable. */
+  commitSha: string | null;
+  /** Normalized subdirectory scope, or null for the whole repository. */
+  subdir: string | null;
   fileTree: string;
   readme: string;
   isPrivate: boolean;
   stargazerCount: number | null;
+}
+
+export interface GithubDataOptions {
+  githubPat?: string;
+  ref?: string | null;
+  subdir?: string | null;
+  signal?: AbortSignal;
+}
+
+interface GitHubCommitResponse {
+  sha?: string;
 }
 
 const EXCLUDED_PATTERNS = [
@@ -98,7 +123,7 @@ async function getRepoMetadata(
   stargazerCount: number | null;
 }> {
   const data = await fetchJson<GitHubRepoResponse>(
-    `https://api.github.com/repos/${username}/${repo}`,
+    `${githubApiBase()}/repos/${username}/${repo}`,
     headers,
     "Repository not found.",
     signal,
@@ -112,24 +137,65 @@ async function getRepoMetadata(
   };
 }
 
+async function resolveCommitSha(
+  username: string,
+  repo: string,
+  ref: string,
+  headers: HeadersInit,
+  isExplicitRef: boolean,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    const data = await fetchJson<GitHubCommitResponse>(
+      `${githubApiBase()}/repos/${username}/${repo}/commits/${encodeURIComponent(ref)}`,
+      headers,
+      `Branch, tag, or commit "${ref}" was not found in the repository.`,
+      signal,
+    );
+    return data.sha ?? null;
+  } catch (error) {
+    if (isExplicitRef) {
+      throw error;
+    }
+    // The default branch should always resolve; if it does not (e.g. an
+    // empty repository), the tree fetch below produces the real error.
+    return null;
+  }
+}
+
+export function normalizeSubdir(subdir?: string | null): string | null {
+  return subdir?.trim().replace(/^\/+|\/+$/g, "") || null;
+}
+
 async function getFileTree(
   username: string,
   repo: string,
-  branch: string,
+  treeRef: string,
+  subdir: string | null,
   headers: HeadersInit,
   signal?: AbortSignal,
 ): Promise<string> {
   const data = await fetchJson<GitHubTreeResponse>(
-    `https://api.github.com/repos/${username}/${repo}/git/trees/${branch}?recursive=1`,
+    `${githubApiBase()}/repos/${username}/${repo}/git/trees/${encodeURIComponent(treeRef)}?recursive=1`,
     headers,
     "Could not fetch repository file tree.",
     signal,
   );
 
-  const paths = (data.tree ?? [])
+  let paths = (data.tree ?? [])
     .map((item) => item.path)
     .filter((path): path is string => Boolean(path))
     .filter(shouldIncludeFile);
+
+  if (subdir) {
+    const prefix = `${subdir}/`;
+    paths = paths.filter((path) => path === subdir || path.startsWith(prefix));
+    if (!paths.length) {
+      throw new Error(
+        `Subdirectory "${subdir}" was not found in the repository.`,
+      );
+    }
+  }
 
   if (!paths.length) {
     throw new Error(
@@ -140,14 +206,13 @@ async function getFileTree(
   return paths.join("\n");
 }
 
-async function getReadme(
-  username: string,
-  repo: string,
+async function fetchReadmeContent(
+  url: string,
   headers: HeadersInit,
   signal?: AbortSignal,
 ): Promise<string> {
   const data = await fetchJson<GitHubReadmeResponse>(
-    `https://api.github.com/repos/${username}/${repo}/readme`,
+    url,
     headers,
     "No README found for the specified repository.",
     signal,
@@ -164,12 +229,47 @@ async function getReadme(
   return data.content;
 }
 
+async function getReadme(
+  username: string,
+  repo: string,
+  ref: string | null,
+  subdir: string | null,
+  headers: HeadersInit,
+  signal?: AbortSignal,
+): Promise<string> {
+  const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+
+  if (subdir) {
+    try {
+      return await fetchReadmeContent(
+        `${githubApiBase()}/repos/${username}/${repo}/readme/${subdir
+          .split("/")
+          .map(encodeURIComponent)
+          .join("/")}${refQuery}`,
+        headers,
+        signal,
+      );
+    } catch {
+      // Fall back to the repository root README below.
+    }
+  }
+
+  return fetchReadmeContent(
+    `${githubApiBase()}/repos/${username}/${repo}/readme${refQuery}`,
+    headers,
+    signal,
+  );
+}
+
 export async function getGithubData(
   username: string,
   repo: string,
-  githubPat?: string,
-  signal?: AbortSignal,
+  options: GithubDataOptions = {},
 ): Promise<GithubData> {
+  const { githubPat, signal } = options;
+  const requestedRef = options.ref?.trim() || null;
+  const subdir = normalizeSubdir(options.subdir);
+
   const headers = await getGitHubApiHeaders({ githubPat });
   const { defaultBranch, isPrivate, stargazerCount } = await getRepoMetadata(
     username,
@@ -177,13 +277,32 @@ export async function getGithubData(
     headers,
     signal,
   );
+  const resolvedRef = requestedRef ?? defaultBranch;
+  const commitSha = await resolveCommitSha(
+    username,
+    repo,
+    resolvedRef,
+    headers,
+    requestedRef !== null,
+    signal,
+  );
   const [fileTree, readme] = await Promise.all([
-    getFileTree(username, repo, defaultBranch, headers, signal),
-    getReadme(username, repo, headers, signal),
+    getFileTree(
+      username,
+      repo,
+      commitSha ?? resolvedRef,
+      subdir,
+      headers,
+      signal,
+    ),
+    getReadme(username, repo, requestedRef, subdir, headers, signal),
   ]);
 
   return {
     defaultBranch,
+    resolvedRef,
+    commitSha,
+    subdir,
     fileTree,
     readme,
     isPrivate,

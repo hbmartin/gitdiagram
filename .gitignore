@@ -55,3 +55,7 @@ backend/.venv
 
 # vscode
 .vscode/
+
+# Playwright
+/test-results/
+/playwright-report/

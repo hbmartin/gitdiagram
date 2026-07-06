@@ -23,6 +23,7 @@ interface MainCardProps {
   lastGenerated?: Date;
   actualCost?: string;
   onExportImage?: () => void;
+  onExportSvg?: () => void;
   onRegenerate?: () => void;
   zoomingEnabled?: boolean;
   onZoomToggle?: () => void;
@@ -38,6 +39,7 @@ export default function MainCard({
   lastGenerated,
   actualCost,
   onExportImage,
+  onExportSvg,
   onRegenerate,
   zoomingEnabled,
   onZoomToggle,
@@ -66,10 +68,16 @@ export default function MainCard({
       return;
     }
 
-    const { username, repo } = parsed;
+    const { username, repo, ref, subdir } = parsed;
     const sanitizedUsername = encodeURIComponent(username);
     const sanitizedRepo = encodeURIComponent(repo);
-    router.push(`/${sanitizedUsername}/${sanitizedRepo}`);
+    const query = new URLSearchParams();
+    if (ref) query.set("ref", ref);
+    if (subdir) query.set("subdir", subdir);
+    const queryString = query.toString();
+    router.push(
+      `/${sanitizedUsername}/${sanitizedRepo}${queryString ? `?${queryString}` : ""}`,
+    );
   };
 
   const handleExampleClick = (repoPath: string, e: React.MouseEvent) => {
@@ -188,6 +196,9 @@ export default function MainCard({
                       lastGenerated={lastGenerated}
                       actualCost={actualCost}
                       onExportImage={onExportImage!}
+                      onExportSvg={onExportSvg}
+                      username={username}
+                      repo={repo}
                     />
                   )}
                 </div>

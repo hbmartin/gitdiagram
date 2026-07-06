@@ -4,6 +4,7 @@ import { GeistSans } from "geist/font/sans";
 import { type Metadata } from "next";
 import { Header } from "~/components/header";
 import { Footer } from "~/components/footer";
+import { HideOnEmbed } from "~/components/hide-on-embed";
 import { CSPostHogProvider } from "./providers";
 import { Toaster } from "~/components/ui/sonner";
 import { SITE_URL } from "~/lib/site";
@@ -85,9 +86,13 @@ export default function RootLayout({
     >
       <body className="flex min-h-screen flex-col">
         <CSPostHogProvider>
-          <Header />
+          <HideOnEmbed>
+            <Header />
+          </HideOnEmbed>
           <main className="flex-grow">{children}</main>
-          <Footer />
+          <HideOnEmbed>
+            <Footer />
+          </HideOnEmbed>
           <Toaster />
         </CSPostHogProvider>
       </body>

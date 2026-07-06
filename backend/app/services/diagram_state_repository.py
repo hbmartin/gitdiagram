@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import urllib.parse
 import os
+from datetime import datetime, timezone
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -57,8 +59,38 @@ def _normalize_segment(value: str) -> str:
     return quote(value.strip().lower(), safe="")
 
 
+MAX_HISTORY_ENTRIES = 20
+
+
 def _repo_key(username: str, repo: str) -> str:
     return f"{username.strip().lower()}/{repo.strip().lower()}"
+
+
+def normalize_repo_variant(variant: dict[str, Any] | None) -> dict[str, str | None]:
+    ref = ((variant or {}).get("ref") or "").strip() or None
+    subdir = ((variant or {}).get("subdir") or "").strip().strip("/") or None
+    return {"ref": ref, "subdir": subdir}
+
+
+def is_default_variant(variant: dict[str, Any] | None) -> bool:
+    normalized = normalize_repo_variant(variant)
+    return normalized["ref"] is None and normalized["subdir"] is None
+
+
+def _variant_segments(variant: dict[str, Any] | None) -> tuple[str, str] | None:
+    normalized = normalize_repo_variant(variant)
+    if normalized["ref"] is None and normalized["subdir"] is None:
+        return None
+    # Refs and subdirs are case-sensitive, so they are encoded without lowercasing.
+    ref_segment = (
+        urllib.parse.quote(normalized["ref"], safe="") if normalized["ref"] else "@default"
+    )
+    subdir_segment = (
+        urllib.parse.quote(normalized["subdir"], safe="")
+        if normalized["subdir"]
+        else "@root"
+    )
+    return ref_segment, subdir_segment
 
 
 class _ArtifactLocator:
@@ -102,9 +134,11 @@ class _ArtifactLocator:
         repo: str,
         visibility: ArtifactVisibility,
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> tuple[str, str, str]:
         normalized_username = _normalize_segment(username)
         normalized_repo = _normalize_segment(repo)
+        segments = _variant_segments(variant)
 
         if visibility == "private":
             if not github_pat:
@@ -112,6 +146,13 @@ class _ArtifactLocator:
             namespace = self._pat_namespace(github_pat)
             if not self.private_bucket:
                 raise ValueError("Missing R2_PRIVATE_BUCKET.")
+            if segments:
+                ref_segment, subdir_segment = segments
+                return (
+                    self.private_bucket,
+                    f"private/v1/{namespace}/{normalized_username}/{normalized_repo}/variants/{ref_segment}/{subdir_segment}.json",
+                    f"status:v1:private:{namespace}:{normalized_username}:{normalized_repo}:{ref_segment}:{subdir_segment}",
+                )
             return (
                 self.private_bucket,
                 f"private/v1/{namespace}/{normalized_username}/{normalized_repo}.json",
@@ -120,6 +161,13 @@ class _ArtifactLocator:
 
         if not self.public_bucket:
             raise ValueError("Missing R2_PUBLIC_BUCKET.")
+        if segments:
+            ref_segment, subdir_segment = segments
+            return (
+                self.public_bucket,
+                f"public/v1/{normalized_username}/{normalized_repo}/variants/{ref_segment}/{subdir_segment}.json",
+                f"status:v1:public:{normalized_username}:{normalized_repo}:{ref_segment}:{subdir_segment}",
+            )
         return (
             self.public_bucket,
             f"public/v1/{normalized_username}/{normalized_repo}.json",
@@ -155,12 +203,22 @@ class _R2ArtifactStore:
             return self._s3_client
         if not self.is_configured():
             raise ValueError("Missing R2 configuration.")
+        # R2_ENDPOINT overrides the Cloudflare endpoint for any S3-compatible
+        # store (MinIO, LocalStack, e2e mocks); those need path-style addressing.
+        endpoint_override = (os.getenv("R2_ENDPOINT") or "").strip() or None
+        client_kwargs = {}
+        if endpoint_override:
+            from botocore.config import Config as _BotoConfig
+
+            client_kwargs["config"] = _BotoConfig(s3={"addressing_style": "path"})
         self._s3_client = boto3.client(
             "s3",
-            endpoint_url=f"https://{self.account_id}.r2.cloudflarestorage.com",
+            endpoint_url=endpoint_override
+            or f"https://{self.account_id}.r2.cloudflarestorage.com",
             aws_access_key_id=self.access_key_id,
             aws_secret_access_key=self.secret_access_key,
             region_name="auto",
+            **client_kwargs,
         )
         return self._s3_client
 
@@ -185,6 +243,9 @@ class _R2ArtifactStore:
             Body=json.dumps(payload).encode("utf-8"),
             ContentType="application/json",
         )
+
+    def delete_object(self, bucket: str, key: str) -> None:
+        self._get_client().delete_object(Bucket=bucket, Key=key)
 
     def _normalize_browse_index_entries(
         self,
@@ -298,12 +359,14 @@ class _R2ArtifactStore:
         visibility: ArtifactVisibility,
         latest_session_summary: dict[str, Any],
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> bool:
         bucket, artifact_key, _status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         artifact = self.get_json_object(bucket, artifact_key)
         if not artifact:
@@ -327,12 +390,17 @@ class _R2ArtifactStore:
         visibility: ArtifactVisibility,
         github_pat: str | None = None,
         slim_audit: dict[str, Any],
+        variant: dict[str, Any] | None = None,
+        ref: str | None = None,
+        subdir: str | None = None,
+        commit_sha: str | None = None,
     ) -> tuple[str, str, str]:
         bucket, artifact_key, status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         updated_at = str(audit.get("updatedAt") or audit.get("createdAt") or "")
         payload = {
@@ -348,9 +416,79 @@ class _R2ArtifactStore:
             "usedOwnKey": used_own_key,
             "latestSessionSummary": slim_audit,
             "lastSuccessfulAt": updated_at,
+            "ref": ref,
+            "subdir": subdir,
+            "commitSha": commit_sha,
         }
         self.put_json_object(bucket, artifact_key, payload)
+        try:
+            self._append_version_history(
+                bucket=bucket,
+                artifact_key=artifact_key,
+                payload=payload,
+            )
+        except Exception:
+            # Version history is best-effort; the primary artifact is saved.
+            pass
         return bucket, artifact_key, status_key
+
+    def _append_version_history(
+        self,
+        *,
+        bucket: str,
+        artifact_key: str,
+        payload: dict[str, Any],
+    ) -> None:
+        # Mirrors src/server/storage/version-history.ts.
+        generated_at = payload.get("generatedAt")
+        if not generated_at:
+            return
+        base = artifact_key[: -len(".json")] if artifact_key.endswith(".json") else artifact_key
+        entry_key = f"{base}/history/{urllib.parse.quote(str(generated_at), safe='')}.json"
+        index_key = f"{base}/history/index.json"
+
+        self.put_json_object(bucket, entry_key, payload)
+
+        index = self.get_json_object(bucket, index_key) or {
+            "version": 1,
+            "updatedAt": "",
+            "entries": [],
+        }
+        latest_summary = payload.get("latestSessionSummary") or {}
+        entry = {
+            "id": generated_at,
+            "generatedAt": generated_at,
+            "commitSha": payload.get("commitSha"),
+            "ref": payload.get("ref"),
+            "subdir": payload.get("subdir"),
+            "model": latest_summary.get("model"),
+            "key": entry_key,
+        }
+        entries = [entry] + [
+            candidate
+            for candidate in index.get("entries", [])
+            if candidate.get("id") != generated_at
+        ]
+        kept = entries[:MAX_HISTORY_ENTRIES]
+        evicted = entries[MAX_HISTORY_ENTRIES:]
+
+        self.put_json_object(
+            bucket,
+            index_key,
+            {
+                "version": 1,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+                "entries": kept,
+            },
+        )
+        for evicted_entry in evicted:
+            key = evicted_entry.get("key")
+            if not key:
+                continue
+            try:
+                self.delete_object(bucket, key)
+            except Exception:
+                pass
 
 
 class _UpstashClient:
@@ -415,12 +553,14 @@ class _FailureStatusStore:
         repo: str,
         visibility: ArtifactVisibility,
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> None:
         _bucket, _artifact_key, status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         self.redis.command(["DEL", status_key])
 
@@ -432,12 +572,14 @@ class _FailureStatusStore:
         visibility: ArtifactVisibility,
         latest_session_summary: dict[str, Any],
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> None:
         _bucket, _artifact_key, status_key = self.locator.resolve_location(
             username=username,
             repo=repo,
             visibility=visibility,
             github_pat=github_pat,
+            variant=variant,
         )
         payload = {
             "version": 1,
@@ -532,6 +674,7 @@ class DiagramStateRepository:
             "quotaResetAt": audit.get("quotaResetAt"),
             "estimatedCost": audit.get("estimatedCost"),
             "finalCost": audit.get("finalCost"),
+            "sampled": audit.get("sampled"),
             "graph": audit.get("graph"),
             "graphAttempts": audit.get("graphAttempts", []) if audit.get("status") == "failed" else [],
             "stageUsages": [],
@@ -564,6 +707,7 @@ class DiagramStateRepository:
         audit: dict[str, Any],
         visibility: ArtifactVisibility | None = None,
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
     ) -> None:
         if audit.get("status") not in {"failed", "succeeded"}:
             return
@@ -582,6 +726,7 @@ class DiagramStateRepository:
                 visibility=resolved_visibility,
                 github_pat=github_pat,
                 latest_session_summary=latest_session_summary,
+                variant=variant,
             )
 
         if audit.get("status") == "failed" and not artifact_updated and self.status_store_is_configured():
@@ -591,6 +736,7 @@ class DiagramStateRepository:
                 visibility=resolved_visibility,
                 github_pat=github_pat,
                 latest_session_summary=latest_session_summary,
+                variant=variant,
             )
             return
 
@@ -600,6 +746,7 @@ class DiagramStateRepository:
                 repo=repo,
                 visibility=resolved_visibility,
                 github_pat=github_pat,
+                variant=variant,
             )
 
     def save_successful_diagram_state(
@@ -615,6 +762,10 @@ class DiagramStateRepository:
         stargazer_count: int | None,
         visibility: ArtifactVisibility = "public",
         github_pat: str | None = None,
+        variant: dict[str, Any] | None = None,
+        ref: str | None = None,
+        subdir: str | None = None,
+        commit_sha: str | None = None,
     ) -> None:
         if not self.artifact_storage_is_configured():
             raise ValueError("Missing R2 configuration.")
@@ -632,6 +783,10 @@ class DiagramStateRepository:
             visibility=visibility,
             github_pat=github_pat,
             slim_audit=slim_audit,
+            variant=variant,
+            ref=ref,
+            subdir=subdir,
+            commit_sha=commit_sha,
         )
         if self.status_store_is_configured():
             self.status_store.clear(
@@ -639,6 +794,7 @@ class DiagramStateRepository:
                 repo=repo,
                 visibility=visibility,
                 github_pat=github_pat,
+                variant=variant,
             )
 
     def upsert_public_browse_index_entry(

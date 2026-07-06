@@ -54,7 +54,10 @@ export function toRepoKey(entry: Pick<BrowseIndexEntry, "username" | "repo">) {
   return `${entry.username.trim().toLowerCase()}/${entry.repo.trim().toLowerCase()}`;
 }
 
-function compareNamesAscending(left: BrowseIndexEntry, right: BrowseIndexEntry) {
+function compareNamesAscending(
+  left: BrowseIndexEntry,
+  right: BrowseIndexEntry,
+) {
   return toRepoKey(left).localeCompare(toRepoKey(right));
 }
 
@@ -109,7 +112,9 @@ export function parsePageNumber(
   return Math.floor(numericPage);
 }
 
-export function normalizeBrowseQuery(query: BrowseQuery): NormalizedBrowseQuery {
+export function normalizeBrowseQuery(
+  query: BrowseQuery,
+): NormalizedBrowseQuery {
   return {
     sort: parseBrowseSort(query.sort),
     q: (query.q ?? "").trim(),
@@ -169,7 +174,12 @@ export function getBrowsePageFromEntries(
   entries: BrowseIndexEntry[],
   query: BrowseQuery,
 ): BrowsePageResult {
-  const { sort, q, minStars, page: requestedPage } = normalizeBrowseQuery(query);
+  const {
+    sort,
+    q,
+    minStars,
+    page: requestedPage,
+  } = normalizeBrowseQuery(query);
   const normalizedQuery = q.toLowerCase();
   const filteredEntries = entries.filter((entry) => {
     const matchesQuery = normalizedQuery

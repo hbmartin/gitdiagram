@@ -15,6 +15,8 @@ import {
   writeFailureSummary,
 } from "~/server/storage/status-store";
 import { upsertBrowseIndexEntry } from "~/server/storage/browse-diagrams";
+import { appendDiagramVersion } from "~/server/storage/version-history";
+import type { RepoVariant } from "~/server/storage/cache-key";
 import type { ArtifactVisibility } from "~/server/storage/types";
 
 export interface DiagramStateRecord {
@@ -36,11 +38,13 @@ export async function getDiagramStateRecord(
   username: string,
   repo: string,
   githubPat?: string,
+  variant?: RepoVariant | null,
 ): Promise<DiagramStateRecord> {
   const storedArtifactState = await getStoredDiagramState({
     username,
     repo,
     githubPat,
+    variant,
   });
   if (storedArtifactState) {
     return storedArtifactState;
@@ -50,6 +54,7 @@ export async function getDiagramStateRecord(
     username,
     repo,
     githubPat,
+    variant,
   });
   if (storedFailureState) {
     return storedFailureState;
@@ -70,6 +75,7 @@ export async function persistTerminalSessionAudit(params: {
   githubPat?: string;
   visibility?: ArtifactVisibility;
   audit: GenerationSessionAudit;
+  variant?: RepoVariant | null;
 }) {
   if (params.audit.status !== "failed" && params.audit.status !== "succeeded") {
     return;
@@ -83,6 +89,7 @@ export async function persistTerminalSessionAudit(params: {
     githubPat: params.githubPat,
     visibility,
     latestSessionSummary: slimAudit,
+    variant: params.variant,
   });
 
   if (!artifactUpdated && params.audit.status === "failed") {
@@ -92,6 +99,7 @@ export async function persistTerminalSessionAudit(params: {
       githubPat: params.githubPat,
       visibility,
       latestSessionSummary: slimAudit,
+      variant: params.variant,
     });
     return;
   }
@@ -102,6 +110,7 @@ export async function persistTerminalSessionAudit(params: {
       repo: params.repo,
       githubPat: params.githubPat,
       visibility,
+      variant: params.variant,
     });
   }
 }
@@ -117,10 +126,14 @@ export async function saveSuccessfulDiagramState(params: {
   diagram: string;
   audit: GenerationSessionAudit;
   usedOwnKey: boolean;
+  variant?: RepoVariant | null;
+  ref?: string | null;
+  subdir?: string | null;
+  commitSha?: string | null;
 }) {
   const successfulAt = params.audit.updatedAt || new Date().toISOString();
 
-  await writeDiagramArtifact({
+  const artifact = await writeDiagramArtifact({
     username: params.username,
     repo: params.repo,
     githubPat: params.githubPat,
@@ -133,13 +146,32 @@ export async function saveSuccessfulDiagramState(params: {
     usedOwnKey: params.usedOwnKey,
     latestSessionSummary: toStoredSessionSummary(params.audit),
     lastSuccessfulAt: successfulAt,
+    variant: params.variant,
+    ref: params.ref,
+    subdir: params.subdir,
+    commitSha: params.commitSha,
   });
+
+  try {
+    await appendDiagramVersion({
+      username: params.username,
+      repo: params.repo,
+      githubPat: params.githubPat,
+      visibility: params.visibility,
+      variant: params.variant,
+      artifact,
+    });
+  } catch (error) {
+    // Version history is best-effort; the primary artifact is already saved.
+    console.error("Failed to append diagram version history:", error);
+  }
 
   await clearFailureSummary({
     username: params.username,
     repo: params.repo,
     githubPat: params.githubPat,
     visibility: params.visibility,
+    variant: params.variant,
   });
 }
 
@@ -162,11 +194,13 @@ export async function recordLatestSessionRenderError(params: {
   repo: string;
   githubPat?: string;
   renderError: string;
+  variant?: RepoVariant | null;
 }) {
   const current = await getDiagramStateRecord(
     params.username,
     params.repo,
     params.githubPat,
+    params.variant,
   );
   const audit = current.latestSessionAudit;
   if (!audit) {
@@ -179,6 +213,7 @@ export async function recordLatestSessionRenderError(params: {
         username: params.username,
         repo: params.repo,
         githubPat: params.githubPat,
+        variant: params.variant,
       })
     )?.location.visibility ?? inferVisibility(params);
 
@@ -206,5 +241,6 @@ export async function recordLatestSessionRenderError(params: {
     githubPat: params.githubPat,
     visibility,
     audit: nextAudit,
+    variant: params.variant,
   });
 }

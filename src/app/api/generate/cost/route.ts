@@ -13,13 +13,25 @@ import {
   getProvider,
   shouldUseExactInputTokenCount,
 } from "~/server/generate/model-config";
+import { estimateTokens } from "~/server/generate/openai";
+import {
+  fitFileTreeToTokenBudget,
+  MIN_TREE_TOKEN_BUDGET,
+  TRUNCATION_TOKEN_MARGIN,
+} from "~/server/generate/tree-budget";
+import {
+  FREE_GENERATION_INPUT_TOKEN_LIMIT,
+  HARD_GENERATION_INPUT_TOKEN_LIMIT,
+} from "~/server/generate/limits";
 import { generateRequestSchema } from "~/server/generate/types";
+import { createTimer, logEvent } from "~/server/observability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
+  const timer = createTimer();
   try {
     const parsed = generateRequestSchema.safeParse(await request.json());
     if (!parsed.success) {
@@ -35,6 +47,8 @@ export async function POST(request: Request) {
       repo,
       api_key: apiKey,
       github_pat: githubPat,
+      ref,
+      subdir,
     } = parsed.data;
     const provider = getProvider();
     const model = getModel(provider);
@@ -57,23 +71,57 @@ export async function POST(request: Request) {
       }
     }
 
-    const githubData = await getGithubData(username, repo, githubPat);
-    const estimate = await estimateGenerationCost({
-      provider,
-      model,
-      fileTree: githubData.fileTree,
-      readme: githubData.readme,
+    let githubData = await getGithubData(username, repo, {
+      githubPat,
+      ref,
+      subdir,
+    });
+    const runEstimate = () =>
+      estimateGenerationCost({
+        provider,
+        model,
+        fileTree: githubData.fileTree,
+        readme: githubData.readme,
+        username,
+        repo,
+        apiKey,
+        preferExactInputTokenCount: shouldUseExactInputTokenCount({
+          provider,
+          apiKey,
+        }),
+      });
+    let estimate = await runEstimate();
+
+    const inputTokenLimit = apiKey
+      ? HARD_GENERATION_INPUT_TOKEN_LIMIT
+      : FREE_GENERATION_INPUT_TOKEN_LIMIT;
+    let sampleInfo = null;
+    if (estimate.explanationInputTokens > inputTokenLimit) {
+      const treeTokens = estimateTokens(githubData.fileTree);
+      const overage = estimate.explanationInputTokens - inputTokenLimit;
+      const treeBudget = treeTokens - overage - TRUNCATION_TOKEN_MARGIN;
+      if (treeBudget >= MIN_TREE_TOKEN_BUDGET) {
+        const fitted = fitFileTreeToTokenBudget(
+          githubData.fileTree,
+          treeBudget,
+        );
+        if (fitted.sample) {
+          githubData = { ...githubData, fileTree: fitted.fileTree };
+          sampleInfo = fitted.sample;
+          estimate = await runEstimate();
+        }
+      }
+    }
+
+    logEvent("generate.cost.success", {
       username,
       repo,
-      apiKey,
-      preferExactInputTokenCount: shouldUseExactInputTokenCount({
-        provider,
-        apiKey,
-      }),
+      elapsed_ms: timer.elapsedMs(),
+      model,
     });
-
     return NextResponse.json({
       ok: true,
+      sampled: sampleInfo ?? undefined,
       cost: estimate.costSummary.display,
       cost_summary: estimate.costSummary,
       model,
@@ -86,6 +134,10 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    logEvent("generate.cost.failed", {
+      elapsed_ms: timer.elapsedMs(),
+      error: error instanceof Error ? error.message : String(error),
+    });
     return NextResponse.json({
       ok: false,
       error:

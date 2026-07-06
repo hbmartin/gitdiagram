@@ -43,8 +43,18 @@ const geistFontsPromise = Promise.all([
   readFile(path.join(geistSansDir, "Geist-Medium.ttf")),
   readFile(path.join(geistSansDir, "Geist-Bold.ttf")),
 ]).then(([regular, medium, bold]) => [
-  { name: "Geist", data: regular, weight: 400 as const, style: "normal" as const },
-  { name: "Geist", data: medium, weight: 500 as const, style: "normal" as const },
+  {
+    name: "Geist",
+    data: regular,
+    weight: 400 as const,
+    style: "normal" as const,
+  },
+  {
+    name: "Geist",
+    data: medium,
+    weight: 500 as const,
+    style: "normal" as const,
+  },
   { name: "Geist", data: bold, weight: 700 as const, style: "normal" as const },
 ]);
 
@@ -88,13 +98,7 @@ function fitRepoSize(repo: string) {
   return 88;
 }
 
-function MetaItem({
-  value,
-  label,
-}: {
-  value: string;
-  label: string;
-}) {
+function MetaItem({ value, label }: { value: string; label: string }) {
   return (
     <div
       style={{
@@ -156,7 +160,11 @@ function RepoCard(data: RepoCardData) {
     {
       label: "Visibility",
       value:
-        data.isPrivate === null ? "Unknown" : data.isPrivate ? "Private" : "Public",
+        data.isPrivate === null
+          ? "Unknown"
+          : data.isPrivate
+            ? "Private"
+            : "Public",
     },
   ];
 
@@ -230,15 +238,15 @@ function RepoCard(data: RepoCardData) {
             }}
           >
             <div
-            style={{
-              display: "flex",
-              fontSize: fitOwnerSize(data.username),
-              fontWeight: 400,
-              lineHeight: 0.98,
-              letterSpacing: "-0.06em",
-              color: colors.foreground,
-            }}
-          >
+              style={{
+                display: "flex",
+                fontSize: fitOwnerSize(data.username),
+                fontWeight: 400,
+                lineHeight: 0.98,
+                letterSpacing: "-0.06em",
+                color: colors.foreground,
+              }}
+            >
               {data.username}/
             </div>
             <div
@@ -275,7 +283,11 @@ function RepoCard(data: RepoCardData) {
             }}
           >
             {metadata.map((item) => (
-              <MetaItem key={item.label} value={item.value} label={item.label} />
+              <MetaItem
+                key={item.label}
+                value={item.value}
+                label={item.label}
+              />
             ))}
           </div>
         </div>

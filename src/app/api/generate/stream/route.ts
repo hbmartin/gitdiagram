@@ -3,7 +3,11 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { after } from "next/server";
 
 import type { GenerationTokenUsage } from "~/features/diagram/cost";
-import { diagramGraphSchema, MAX_GRAPH_ATTEMPTS } from "~/features/diagram/graph";
+import {
+  diagramGraphSchema,
+  MAX_GRAPH_ATTEMPTS,
+  type DiagramSampleInfo,
+} from "~/features/diagram/graph";
 import type { ArtifactVisibility } from "~/server/storage/types";
 import { revalidateBrowseIndexCache } from "~/app/browse/data";
 import {
@@ -27,8 +31,17 @@ import {
   estimateGenerationCost,
   type GenerationEstimateResult,
 } from "~/server/generate/cost-estimate";
-import { extractTaggedSection, toTaggedMessage } from "~/server/generate/format";
+import {
+  extractTaggedSection,
+  toTaggedMessage,
+} from "~/server/generate/format";
 import { getGithubData } from "~/server/generate/github";
+import {
+  buildFileTreeSampleNote,
+  fitFileTreeToTokenBudget,
+  MIN_TREE_TOKEN_BUDGET,
+  TRUNCATION_TOKEN_MARGIN,
+} from "~/server/generate/tree-budget";
 import {
   buildFileTreeLookup,
   compileDiagramGraph,
@@ -41,9 +54,20 @@ import {
   getProviderLabel,
   shouldUseExactInputTokenCount,
 } from "~/server/generate/model-config";
-import { generateStructuredOutput, streamCompletion } from "~/server/generate/openai";
+import {
+  estimateTokens,
+  generateStructuredOutput,
+  streamCompletion,
+} from "~/server/generate/openai";
 import { validateMermaidSyntax } from "~/server/generate/mermaid";
-import { SYSTEM_FIRST_PROMPT, SYSTEM_GRAPH_PROMPT } from "~/server/generate/prompts";
+import {
+  SYSTEM_FIRST_PROMPT,
+  SYSTEM_GRAPH_PROMPT,
+} from "~/server/generate/prompts";
+import {
+  isDefaultVariant,
+  normalizeRepoVariant,
+} from "~/server/storage/cache-key";
 import {
   getPublicDiagramStateCacheTag,
   getRepoPagePath,
@@ -67,6 +91,17 @@ import {
   GRAPH_MAX_OUTPUT_TOKENS,
   sumGenerationUsage,
 } from "~/server/generate/pricing";
+import {
+  FREE_GENERATION_INPUT_TOKEN_LIMIT,
+  HARD_GENERATION_INPUT_TOKEN_LIMIT,
+} from "~/server/generate/limits";
+import {
+  isTerminalProgressStatus,
+  readGenerationProgress,
+  writeGenerationProgress,
+  type GenerationProgressSnapshot,
+} from "~/server/generate/progress-store";
+import { createTimer, logEvent } from "~/server/observability";
 import { generateRequestSchema, sseMessage } from "~/server/generate/types";
 
 export const runtime = "nodejs";
@@ -75,8 +110,6 @@ export const maxDuration = 300;
 
 const DEFAULT_OPENAI_KEY_QUOTA_EXHAUSTED_ERROR =
   "GitDiagram's default OpenAI key is temporarily unavailable because its upstream API quota is exhausted. I'm a solo student engineer running this free and open source, so please try again later or use your own OpenAI API key.";
-const FREE_GENERATION_INPUT_TOKEN_LIMIT = 100_000;
-const HARD_GENERATION_INPUT_TOKEN_LIMIT = 195_000;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -166,13 +199,30 @@ export async function POST(request: Request) {
     repo,
     api_key: apiKey,
     github_pat: githubPat,
+    ref: requestedRef,
+    subdir: requestedSubdir,
   } = parsed.data;
+  const variant = normalizeRepoVariant({
+    ref: requestedRef,
+    subdir: requestedSubdir,
+  });
+  const isDefaultRepoVariant = isDefaultVariant(variant);
 
   const encoder = new TextEncoder();
   const generationAbortController = new AbortController();
   const postResponseTasks: Array<() => Promise<void>> = [];
 
+  // When the client disconnects, the generation keeps running (the work and
+  // cost are already committed) and its progress snapshots stay readable via
+  // the GET resume endpoint. after() keeps the function alive until then.
+  let resolveRunFinished: () => void = () => undefined;
+  const runFinished = new Promise<void>((resolve) => {
+    resolveRunFinished = resolve;
+  });
+  let clientGone = false;
+
   after(async () => {
+    await runFinished;
     for (const task of postResponseTasks) {
       await task();
     }
@@ -182,25 +232,187 @@ export async function POST(request: Request) {
     start(controller) {
       let controllerClosed = false;
       let wasCancelled = false;
-      const abortGeneration = () => {
-        wasCancelled = true;
-        if (!generationAbortController.signal.aborted) {
-          generationAbortController.abort();
-        }
-      };
 
-      request.signal.addEventListener("abort", abortGeneration, { once: true });
+      request.signal.addEventListener(
+        "abort",
+        () => {
+          clientGone = true;
+        },
+        { once: true },
+      );
 
       const closeStream = () => {
         if (controllerClosed) {
           return;
         }
         controllerClosed = true;
-        controller.close();
+        if (!clientGone) {
+          controller.close();
+        }
+      };
+
+      const progressSnapshot: GenerationProgressSnapshot = {
+        sessionId: "",
+        seq: 0,
+        status: "idle",
+        updatedAt: "",
+      };
+      let progressEnabled = true;
+      let lastProgressWriteAt = 0;
+      let progressChain: Promise<void> = Promise.resolve();
+
+      const updateProgressSnapshot = (payload: Record<string, unknown>) => {
+        const message = payload as {
+          status?: string;
+          session_id?: string;
+          message?: string;
+          chunk?: string;
+          [key: string]: unknown;
+        };
+        if (message.session_id) {
+          progressSnapshot.sessionId = message.session_id;
+        }
+        if (message.status === "explanation_chunk") {
+          progressSnapshot.explanation =
+            (progressSnapshot.explanation ?? "") + (message.chunk ?? "");
+          progressSnapshot.status = "explanation_chunk";
+        } else if (message.status) {
+          progressSnapshot.status = message.status;
+        }
+        const assign = <K extends keyof GenerationProgressSnapshot>(
+          target: K,
+          value: GenerationProgressSnapshot[K] | undefined,
+        ) => {
+          if (value !== undefined) {
+            progressSnapshot[target] = value;
+          }
+        };
+        assign(
+          "message",
+          message.message as GenerationProgressSnapshot["message"],
+        );
+        assign(
+          "costSummary",
+          message.cost_summary as GenerationProgressSnapshot["costSummary"],
+        );
+        assign(
+          "quotaResetAt",
+          message.quota_reset_at as GenerationProgressSnapshot["quotaResetAt"],
+        );
+        assign("graph", message.graph as GenerationProgressSnapshot["graph"]);
+        assign(
+          "graphAttempts",
+          message.graph_attempts as GenerationProgressSnapshot["graphAttempts"],
+        );
+        assign(
+          "diagram",
+          message.diagram as GenerationProgressSnapshot["diagram"],
+        );
+        assign(
+          "sampled",
+          message.sampled as GenerationProgressSnapshot["sampled"],
+        );
+        assign("error", message.error as GenerationProgressSnapshot["error"]);
+        assign(
+          "errorCode",
+          message.error_code as GenerationProgressSnapshot["errorCode"],
+        );
+        assign(
+          "validationError",
+          message.validation_error as GenerationProgressSnapshot["validationError"],
+        );
+        assign(
+          "failureStage",
+          message.failure_stage as GenerationProgressSnapshot["failureStage"],
+        );
+        assign(
+          "latestSessionAudit",
+          message.latest_session_audit as GenerationProgressSnapshot["latestSessionAudit"],
+        );
+        assign(
+          "generatedAt",
+          message.generated_at as GenerationProgressSnapshot["generatedAt"],
+        );
+        if (message.status === "complete" && message.explanation) {
+          progressSnapshot.explanation = message.explanation as string;
+        }
+        progressSnapshot.seq += 1;
+        progressSnapshot.updatedAt = new Date().toISOString();
+      };
+
+      const persistProgress = (status: string | undefined) => {
+        if (!progressEnabled || !progressSnapshot.sessionId) {
+          return;
+        }
+        const now = Date.now();
+        const isChunk = status === "explanation_chunk";
+        if (isChunk && now - lastProgressWriteAt < 500) {
+          return;
+        }
+        lastProgressWriteAt = now;
+        const copy = { ...progressSnapshot };
+        progressChain = progressChain
+          .then(() => writeGenerationProgress(copy))
+          .catch(() => {
+            // Progress persistence is best-effort (e.g. Redis unconfigured).
+            progressEnabled = false;
+          });
+      };
+
+      const generationTimer = createTimer();
+
+      const logTerminalEvent = (payload: Record<string, unknown>) => {
+        if (payload.status === "started") {
+          logEvent("generation.started", {
+            username,
+            repo,
+            ref: variant.ref,
+            subdir: variant.subdir,
+            session_id: payload.session_id,
+            sampled: payload.sampled ?? null,
+          });
+          return;
+        }
+        if (payload.status === "complete") {
+          const costSummary = payload.cost_summary as
+            | { amountUsd?: number; usage?: { totalTokens?: number } }
+            | undefined;
+          logEvent("generation.succeeded", {
+            username,
+            repo,
+            ref: variant.ref,
+            subdir: variant.subdir,
+            session_id: payload.session_id,
+            duration_ms: generationTimer.elapsedMs(),
+            cost_usd: costSummary?.amountUsd ?? null,
+            total_tokens: costSummary?.usage?.totalTokens ?? null,
+            graph_attempts: Array.isArray(payload.graph_attempts)
+              ? payload.graph_attempts.length
+              : null,
+            client_gone: clientGone,
+          });
+          return;
+        }
+        if (payload.status === "error") {
+          logEvent("generation.failed", {
+            username,
+            repo,
+            ref: variant.ref,
+            subdir: variant.subdir,
+            session_id: payload.session_id,
+            duration_ms: generationTimer.elapsedMs(),
+            error_code: payload.error_code,
+            failure_stage: payload.failure_stage,
+            client_gone: clientGone,
+          });
+        }
       };
 
       const send = (payload: Record<string, unknown>) => {
-        if (controllerClosed || generationAbortController.signal.aborted) {
+        updateProgressSnapshot(payload);
+        persistProgress(payload.status as string | undefined);
+        logTerminalEvent(payload);
+        if (controllerClosed || clientGone) {
           return;
         }
         controller.enqueue(encoder.encode(sseMessage(payload)));
@@ -227,6 +439,7 @@ export async function POST(request: Request) {
             githubPat,
             visibility: storageVisibility,
             audit: nextAudit,
+            variant,
           });
         };
 
@@ -296,26 +509,52 @@ export async function POST(request: Request) {
             }
           }
 
-          const githubData = await getGithubData(
-            username,
-            repo,
+          let githubData = await getGithubData(username, repo, {
             githubPat,
-            generationAbortController.signal,
-          );
-          storageVisibility = githubData.isPrivate ? "private" : "public";
-          estimate = await estimateGenerationCost({
-            provider,
-            model,
-            fileTree: githubData.fileTree,
-            readme: githubData.readme,
-            username,
-            repo,
-            apiKey,
-            preferExactInputTokenCount: shouldUseExactInputTokenCount({
-              provider,
-              apiKey,
-            }),
+            ref: variant.ref,
+            subdir: variant.subdir,
+            signal: generationAbortController.signal,
           });
+          storageVisibility = githubData.isPrivate ? "private" : "public";
+          const runEstimate = () =>
+            estimateGenerationCost({
+              provider,
+              model,
+              fileTree: githubData.fileTree,
+              readme: githubData.readme,
+              username,
+              repo,
+              apiKey,
+              preferExactInputTokenCount: shouldUseExactInputTokenCount({
+                provider,
+                apiKey,
+              }),
+            });
+          estimate = await runEstimate();
+
+          const inputTokenLimit = apiKey
+            ? HARD_GENERATION_INPUT_TOKEN_LIMIT
+            : FREE_GENERATION_INPUT_TOKEN_LIMIT;
+          let sampleInfo: DiagramSampleInfo | null = null;
+          if (estimate.explanationInputTokens > inputTokenLimit) {
+            const treeTokens = estimateTokens(githubData.fileTree);
+            const overage = estimate.explanationInputTokens - inputTokenLimit;
+            const treeBudget = treeTokens - overage - TRUNCATION_TOKEN_MARGIN;
+            if (treeBudget >= MIN_TREE_TOKEN_BUDGET) {
+              const fitted = fitFileTreeToTokenBudget(
+                githubData.fileTree,
+                treeBudget,
+              );
+              if (fitted.sample) {
+                githubData = { ...githubData, fileTree: fitted.fileTree };
+                sampleInfo = fitted.sample;
+                estimate = await runEstimate();
+              }
+            }
+          }
+          const fileTreeNote = sampleInfo
+            ? buildFileTreeSampleNote(sampleInfo)
+            : undefined;
           const tokenCount = estimate.explanationInputTokens;
 
           audit = withStageUsage(
@@ -324,6 +563,7 @@ export async function POST(request: Request) {
                 ...audit,
                 provider,
                 model,
+                sampled: sampleInfo ?? undefined,
               },
               estimate.costSummary,
             ),
@@ -340,6 +580,7 @@ export async function POST(request: Request) {
             session_id: audit.sessionId,
             message: "Starting generation process...",
             cost_summary: estimate.costSummary,
+            sampled: sampleInfo ?? undefined,
           });
 
           throwIfAborted(generationAbortController.signal);
@@ -381,7 +622,8 @@ export async function POST(request: Request) {
             });
 
             if (!reservation.admitted) {
-              const error = reservation.message || getComplimentaryDenialMessage();
+              const error =
+                reservation.message || getComplimentaryDenialMessage();
               audit = withFailure(
                 {
                   ...audit,
@@ -424,8 +666,7 @@ export async function POST(request: Request) {
             tokenCount < HARD_GENERATION_INPUT_TOKEN_LIMIT &&
             !apiKey
           ) {
-            const error =
-              `File tree and README combined exceeds token limit (${FREE_GENERATION_INPUT_TOKEN_LIMIT.toLocaleString("en-US")}). This repository is too large for free generation. Provide your own ${providerLabel} API key to continue.`;
+            const error = `File tree and README combined exceeds token limit (${FREE_GENERATION_INPUT_TOKEN_LIMIT.toLocaleString("en-US")}). This repository is too large for free generation. Provide your own ${providerLabel} API key to continue.`;
             audit = withFailure(audit, {
               failureStage: "started",
               validationError: error,
@@ -480,7 +721,11 @@ export async function POST(request: Request) {
           await sleep(80);
           throwIfAborted(generationAbortController.signal);
 
-          audit = withTimelineEvent(audit, "explanation", "Analyzing repository structure...");
+          audit = withTimelineEvent(
+            audit,
+            "explanation",
+            "Analyzing repository structure...",
+          );
           send({
             status: "explanation",
             session_id: audit.sessionId,
@@ -494,6 +739,7 @@ export async function POST(request: Request) {
             systemPrompt: SYSTEM_FIRST_PROMPT,
             userPrompt: toTaggedMessage({
               file_tree: githubData.fileTree,
+              file_tree_note: fileTreeNote,
               readme: githubData.readme,
             }),
             apiKey,
@@ -504,7 +750,11 @@ export async function POST(request: Request) {
           for await (const chunk of explanationStream.stream) {
             throwIfAborted(generationAbortController.signal);
             explanationResponse += chunk;
-            send({ status: "explanation_chunk", session_id: audit.sessionId, chunk });
+            send({
+              status: "explanation_chunk",
+              session_id: audit.sessionId,
+              chunk,
+            });
           }
           let explanationUsage: GenerationTokenUsage | null = null;
           try {
@@ -529,9 +779,14 @@ export async function POST(request: Request) {
             hasCompleteMeasuredUsage = false;
           }
 
-          const explanation = extractTaggedSection(explanationResponse, "explanation");
+          const explanation = extractTaggedSection(
+            explanationResponse,
+            "explanation",
+          );
           if (!explanation.trim()) {
-            throw new Error("OpenAI explanation generation returned no usable output.");
+            throw new Error(
+              "OpenAI explanation generation returned no usable output.",
+            );
           }
           audit = withExplanation(audit, explanation);
 
@@ -562,13 +817,18 @@ export async function POST(request: Request) {
               graph_attempts: audit.graphAttempts,
             });
 
-            const { output: graph, rawText, usage } = await generateStructuredOutput({
+            const {
+              output: graph,
+              rawText,
+              usage,
+            } = await generateStructuredOutput({
               provider,
               model,
               systemPrompt: SYSTEM_GRAPH_PROMPT,
               userPrompt: toTaggedMessage({
                 explanation,
                 file_tree: githubData.fileTree,
+                file_tree_note: fileTreeNote,
                 repo_owner: username,
                 repo_name: repo,
                 previous_graph: previousGraphRaw,
@@ -623,7 +883,9 @@ export async function POST(request: Request) {
             audit = withGraphAttempt(audit, attemptAudit);
 
             if (!graphValidation.valid) {
-              validationFeedback = formatGraphValidationFeedback(graphValidation.issues);
+              validationFeedback = formatGraphValidationFeedback(
+                graphValidation.issues,
+              );
               previousGraphRaw = rawText;
               audit = withTimelineEvent(
                 audit,
@@ -669,7 +931,11 @@ export async function POST(request: Request) {
             return;
           }
 
-          audit = withTimelineEvent(audit, "diagram_compiling", "Compiling Mermaid diagram...");
+          audit = withTimelineEvent(
+            audit,
+            "diagram_compiling",
+            "Compiling Mermaid diagram...",
+          );
           send({
             status: "diagram_compiling",
             session_id: audit.sessionId,
@@ -683,7 +949,7 @@ export async function POST(request: Request) {
             graph: validGraph,
             username,
             repo,
-            branch: githubData.defaultBranch,
+            branch: githubData.resolvedRef,
           });
           audit = withCompiledDiagram(audit, diagram);
           send({
@@ -699,7 +965,8 @@ export async function POST(request: Request) {
           const mermaidValidation = await validateMermaidSyntax(diagram);
           if (!mermaidValidation.valid) {
             const compilerError =
-              mermaidValidation.message ?? "Compiled Mermaid failed validation.";
+              mermaidValidation.message ??
+              "Compiled Mermaid failed validation.";
             audit = withFailure(audit, {
               failureStage: "diagram_compiling",
               compilerError,
@@ -729,12 +996,17 @@ export async function POST(request: Request) {
             : {
                 ...estimate.costSummary,
                 kind: "actual" as const,
-                note:
-                  "Some stage usage was unavailable, so the final cost remains approximate.",
+                note: "Some stage usage was unavailable, so the final cost remains approximate.",
               };
           throwIfAborted(generationAbortController.signal);
           audit = withFinalCost(audit, finalCost);
-          audit = withSuccess(withTimelineEvent(audit, "complete", "Diagram generation complete."));
+          audit = withSuccess(
+            withTimelineEvent(
+              audit,
+              "complete",
+              "Diagram generation complete.",
+            ),
+          );
           await saveSuccessfulDiagramState({
             username,
             repo,
@@ -746,14 +1018,22 @@ export async function POST(request: Request) {
             diagram,
             audit,
             usedOwnKey: Boolean(apiKey),
+            variant,
+            ref: githubData.resolvedRef,
+            subdir: githubData.subdir,
+            commitSha: githubData.commitSha,
           });
 
-          if (storageVisibility === "public") {
-            const lastSuccessfulAt = audit.updatedAt ?? new Date().toISOString();
+          if (storageVisibility === "public" && isDefaultRepoVariant) {
+            const lastSuccessfulAt =
+              audit.updatedAt ?? new Date().toISOString();
             postResponseTasks.push(async () => {
               try {
                 revalidatePath(getRepoPagePath(username, repo));
-                revalidateTag(getPublicDiagramStateCacheTag(username, repo), "max");
+                revalidateTag(
+                  getPublicDiagramStateCacheTag(username, repo),
+                  "max",
+                );
                 await updatePublicBrowseIndexForSuccessfulDiagram({
                   username,
                   repo,
@@ -762,7 +1042,10 @@ export async function POST(request: Request) {
                 });
                 revalidateBrowseIndexCache();
               } catch (error) {
-                console.error("Failed to update browse index after completion:", error);
+                console.error(
+                  "Failed to update browse index after completion:",
+                  error,
+                );
               }
             });
           }
@@ -777,6 +1060,7 @@ export async function POST(request: Request) {
             graph_attempts: audit.graphAttempts,
             latest_session_audit: audit,
             generated_at: audit.updatedAt,
+            sampled: sampleInfo ?? undefined,
           });
         } catch (error) {
           if (isAbortError(error)) {
@@ -785,7 +1069,9 @@ export async function POST(request: Request) {
           }
           hasCompleteMeasuredUsage = false;
           const rawMessage =
-            error instanceof Error ? error.message : "Streaming generation failed.";
+            error instanceof Error
+              ? error.message
+              : "Streaming generation failed.";
           const { message, errorCode } = normalizeGenerationError({
             provider: audit.provider,
             apiKey,
@@ -839,16 +1125,148 @@ export async function POST(request: Request) {
               // Best effort quota finalization and audit persistence.
             }
           }
+          try {
+            await progressChain;
+          } catch {
+            // Progress writes are best-effort.
+          }
           closeStream();
+          resolveRunFinished();
         }
       };
 
       void run();
     },
     cancel() {
-      if (!generationAbortController.signal.aborted) {
-        generationAbortController.abort();
-      }
+      // The client went away; keep generating so the result is persisted and
+      // the session can be resumed via GET ?session_id=….
+      clientGone = true;
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+}
+
+const RESUME_POLL_INTERVAL_MS = 800;
+const RESUME_MAX_DURATION_MS = 290_000;
+
+function progressSnapshotToStreamMessage(
+  snapshot: GenerationProgressSnapshot,
+): Record<string, unknown> {
+  return {
+    // Chunk events are cumulative in the snapshot, so a resumer receives the
+    // full explanation under the plain "explanation" status.
+    status:
+      snapshot.status === "explanation_chunk" ? "explanation" : snapshot.status,
+    session_id: snapshot.sessionId,
+    message: snapshot.message,
+    cost_summary: snapshot.costSummary,
+    quota_reset_at: snapshot.quotaResetAt,
+    explanation: snapshot.explanation,
+    diagram: snapshot.diagram,
+    graph: snapshot.graph,
+    graph_attempts: snapshot.graphAttempts,
+    sampled: snapshot.sampled ?? undefined,
+    error: snapshot.error,
+    error_code: snapshot.errorCode,
+    validation_error: snapshot.validationError,
+    failure_stage: snapshot.failureStage,
+    latest_session_audit: snapshot.latestSessionAudit,
+    generated_at: snapshot.generatedAt,
+    resumed: true,
+  };
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const sessionId = url.searchParams.get("session_id")?.trim();
+
+  if (!sessionId) {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "session_id is required.",
+        error_code: "VALIDATION_ERROR",
+      }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      let closed = false;
+      const send = (payload: Record<string, unknown>) => {
+        if (closed) return;
+        controller.enqueue(encoder.encode(sseMessage(payload)));
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        controller.close();
+      };
+
+      const run = async () => {
+        const deadline = Date.now() + RESUME_MAX_DURATION_MS;
+        let lastSeq = -1;
+
+        while (Date.now() < deadline) {
+          if (request.signal.aborted) {
+            close();
+            return;
+          }
+
+          let snapshot: GenerationProgressSnapshot | null = null;
+          try {
+            snapshot = await readGenerationProgress(sessionId);
+          } catch {
+            snapshot = null;
+          }
+
+          if (!snapshot) {
+            send({
+              status: "error",
+              session_id: sessionId,
+              error:
+                "No resumable generation was found for this session. Please regenerate.",
+              error_code: "RESUME_NOT_FOUND",
+            });
+            close();
+            return;
+          }
+
+          if (snapshot.seq !== lastSeq) {
+            lastSeq = snapshot.seq;
+            send(progressSnapshotToStreamMessage(snapshot));
+          }
+
+          if (isTerminalProgressStatus(snapshot.status)) {
+            close();
+            return;
+          }
+
+          await sleep(RESUME_POLL_INTERVAL_MS);
+        }
+
+        send({
+          status: "error",
+          session_id: sessionId,
+          error: "Timed out waiting for the generation to finish.",
+          error_code: "RESUME_TIMEOUT",
+        });
+        close();
+      };
+
+      run().catch(() => close());
+    },
+    cancel() {
+      // Reader went away; polling loop exits on the aborted signal.
     },
   });
 
